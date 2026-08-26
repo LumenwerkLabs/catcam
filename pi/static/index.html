@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>catcam</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #131318; --panel: #1c1c22; --line: #33323b;
+    --fg: #e9e7e2; --dim: #75736d; --accent: #f0a93c; --warn: #d85a30;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 1.25rem;
+    font: 16px/1.5 system-ui, -apple-system, sans-serif;
+    background: var(--bg); color: var(--fg);
+    display: flex; flex-direction: column; align-items: center; gap: 1.25rem;
+  }
+  #video {
+    width: 100%; max-width: 620px; aspect-ratio: 4/3;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    display: grid; place-items: center; color: var(--dim); font-size: .9rem;
+  }
+  .console {
+    width: 100%; max-width: 620px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    padding: 1rem 1rem .75rem;
+  }
+  #dial { display: block; width: 100%; height: auto; touch-action: none; user-select: none; cursor: grab; }
+  #dial:active { cursor: grabbing; }
+  #dial:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 10px; }
+  .bar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-top: .5rem; }
+  .readout { font-variant-numeric: tabular-nums; font-size: 1.75rem; letter-spacing: -.02em; }
+  .readout small { font-size: .8rem; color: var(--dim); letter-spacing: .08em; text-transform: uppercase; display: block; }
+  .readout.stale { color: var(--warn); }
+  .actions { display: flex; gap: .5rem; }
+  button {
+    font: inherit; font-size: .9rem; padding: .5rem 1rem; border-radius: 8px;
+    border: 1px solid var(--line); background: #24232b; color: inherit; cursor: pointer;
+  }
+  button:hover { border-color: #4a4954; }
+  .tick { stroke: var(--line); }
+  .tick.major { stroke: #55535e; }
+  .lbl { fill: var(--dim); font-size: 11px; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+
+<div id="video">el video va acá</div>
+
+<div class="console">
+  <svg id="dial" viewBox="0 0 360 232"
+       tabindex="0" role="slider"
+       aria-label="Orientación horizontal de la cámara"
+       aria-valuemin="0" aria-valuemax="180" aria-valuenow="90" aria-valuetext="90 grados, centro">
+
+    <path d="M 30 195 A 150 150 0 0 1 330 195" fill="none" stroke="#232229" stroke-width="26"/>
+    <g id="ticks"></g>
+    <path id="fov" fill="var(--accent)" fill-opacity=".16" stroke="var(--accent)" stroke-opacity=".35" stroke-width="1"/>
+    <line id="axis" x1="180" y1="195" x2="180" y2="60" stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="3 4"/>
+    <circle id="knob" cx="180" cy="45" r="11" fill="var(--accent)"/>
+    <circle id="knobDot" cx="180" cy="45" r="3.5" fill="#131318"/>
+    <g id="cam">
+      <rect x="167" y="182" width="26" height="18" rx="4" fill="#3d3b45" stroke="#55535e"/>
+      <circle cx="180" cy="191" r="4.5" fill="#131318" stroke="var(--accent)" stroke-width="1.5"/>
+    </g>
+  </svg>
+
+  <div class="bar">
+    <div class="readout" id="readout">90°<small id="zone">centro</small></div>
+    <div class="actions">
+      <button id="left">← 10°</button>
+      <button id="home">Centrar</button>
+      <button id="right">10° →</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const CX = 180, CY = 195, R = 150, FOV = 65;
+const dial = document.getElementById('dial');
+const fov = document.getElementById('fov');
+const axis = document.getElementById('axis');
+const knob = document.getElementById('knob');
+const knobDot = document.getElementById('knobDot');
+const cam = document.getElementById('cam');
+const readout = document.getElementById('readout');
+const zone = document.getElementById('zone');
+
+let angle = 90, sent = 90, inFlight = false;
+
+const pt = (a, r) => {
+  const t = (180 - a) * Math.PI / 180;
+  return [CX + r * Math.cos(t), CY - r * Math.sin(t)];
+};
+
+const ticks = document.getElementById('ticks');
+let marks = '';
+for (let a = 0; a <= 180; a += 15) {
+  const major = a % 45 === 0;
+  const [x1, y1] = pt(a, major ? 168 : 172);
+  const [x2, y2] = pt(a, 182);
+  marks += `<line class="tick${major ? ' major' : ''}" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>`;
+  if (major) {
+    const [lx, ly] = pt(a, 152);
+    marks += `<text class="lbl" x="${lx}" y="${ly}" text-anchor="middle" dominant-baseline="middle">${a}</text>`;
+  }
+}
+ticks.innerHTML = marks;
+
+function zoneName(a) {
+  if (a < 30) return 'extremo izquierdo';
+  if (a < 75) return 'izquierda';
+  if (a <= 105) return 'centro';
+  if (a <= 150) return 'derecha';
+  return 'extremo derecho';
+}
+
+function render() {
+  const a = Math.round(angle);
+  const [ax, ay] = pt(a, R - 22);
+  axis.setAttribute('x2', ax); axis.setAttribute('y2', ay);
+
+  const [sx, sy] = pt(a - FOV / 2, R - 8);
+  const [ex, ey] = pt(a + FOV / 2, R - 8);
+  fov.setAttribute('d', `M ${CX} ${CY} L ${sx} ${sy} A ${R - 8} ${R - 8} 0 0 1 ${ex} ${ey} Z`);
+
+  const [kx, ky] = pt(a, R + 20);
+  knob.setAttribute('cx', kx); knob.setAttribute('cy', ky);
+  knobDot.setAttribute('cx', kx); knobDot.setAttribute('cy', ky);
+
+  cam.setAttribute('transform', `rotate(${a - 90} ${CX} ${CY})`);
+
+  readout.firstChild.textContent = a + '°';
+  zone.textContent = zoneName(a);
+  dial.setAttribute('aria-valuenow', a);
+  dial.setAttribute('aria-valuetext', `${a} grados, ${zoneName(a)}`);
+}
+
+function setAngle(next) {
+  angle = Math.max(0, Math.min(180, next));
+  render();
+  pump();
+}
+
+async function pump() {
+  if (inFlight) return;
+  const target = Math.round(angle);
+  if (target === sent) return;
+  inFlight = true;
+  try {
+    const res = await fetch('/api/pan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ angle: target })
+    });
+    if (!res.ok) throw new Error(res.status);
+    sent = target;
+    readout.classList.remove('stale');
+  } catch (e) {
+    readout.classList.add('stale');
+  } finally {
+    inFlight = false;
+    if (Math.round(angle) !== sent) pump();
+  }
+}
+
+function angleFromEvent(ev) {
+  const rect = dial.getBoundingClientRect();
+  const s = 360 / rect.width;
+  const x = (ev.clientX - rect.left) * s;
+  const y = (ev.clientY - rect.top) * s;
+  const dx = x - CX;
+  const dy = CY - y;
+
+  if (dy <= 0) return dx < 0 ? 0 : 180;
+
+  const t = Math.atan2(dy, dx) * 180 / Math.PI;
+  return 180 - t;
+}
+
+dial.addEventListener('pointerdown', ev => {
+  dial.setPointerCapture(ev.pointerId);
+  setAngle(angleFromEvent(ev));
+});
+dial.addEventListener('pointermove', ev => {
+  if (dial.hasPointerCapture(ev.pointerId)) setAngle(angleFromEvent(ev));
+});
+dial.addEventListener('keydown', ev => {
+  const step = ev.shiftKey ? 10 : 2;
+  if (ev.key === 'ArrowLeft' || ev.key === 'ArrowDown') setAngle(angle - step);
+  else if (ev.key === 'ArrowRight' || ev.key === 'ArrowUp') setAngle(angle + step);
+  else if (ev.key === 'Home') setAngle(90);
+  else return;
+  ev.preventDefault();
+});
+
+document.getElementById('left').onclick = () => setAngle(angle - 10);
+document.getElementById('right').onclick = () => setAngle(angle + 10);
+document.getElementById('home').onclick = () => setAngle(90);
+
+render();
+</script>
+</body>
+</html>
