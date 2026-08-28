@@ -1,3 +1,5 @@
+import asyncio
+import json
 import time
 from contextlib import asynccontextmanager
 from typing import Optional
@@ -7,7 +9,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from audio import Microphone
+from audio import Microphone, Speaker
 from camera import ADJUSTABLE, Camera
 from pico_link import PicoLink
 
@@ -16,11 +18,12 @@ BOUNDARY = 'frame'
 link = None
 camera = None
 mic = None
+speaker = None
 
 
 @asynccontextmanager
 async def lifespan(app):
-    global link, camera, mic
+    global link, camera, mic, speaker
     link = PicoLink()
     print('Pico en', link.address)
     # Sin cámara el pan sigue andando: no tiramos el server abajo.
@@ -32,7 +35,10 @@ async def lifespan(app):
         mic = Microphone().start()
     except Exception as exc:
         print('sin micrófono:', exc)
+    speaker = Speaker()
     yield
+    if speaker:
+        speaker.close()
     if mic:
         mic.stop()
     if camera:
@@ -129,17 +135,43 @@ async def audio_socket(ws: WebSocket):
     if mic is None:
         await ws.close(code=1011, reason='no hay micrófono')
         return
-    # El cliente no adivina el formato: se lo decimos antes del primer chunk.
     await ws.send_json({'rate': mic.rate, 'channels': mic.channels,
-                        'format': 's16le'})
+                        'format': 's16le', 'talkback': speaker is not None})
     queue = mic.subscribe()
-    try:
+    talking = False
+
+    async def downlink():
+        # Mientras el cliente habla no le mandamos el micrófono: se escucharía
+        # a sí mismo con retardo, y encima realimenta si comparten ambiente.
         while True:
-            await ws.send_bytes(await queue.get())
+            pcm = await queue.get()
+            if not talking:
+                await ws.send_bytes(pcm)
+
+    async def uplink():
+        nonlocal talking
+        while True:
+            msg = await ws.receive()
+            if msg['type'] == 'websocket.disconnect':
+                return
+            text = msg.get('text')
+            if text is not None:
+                talking = bool(json.loads(text).get('talk'))
+                if speaker:
+                    speaker.open() if talking else speaker.close()
+            elif msg.get('bytes') and speaker and talking:
+                speaker.write(msg['bytes'])
+
+    down = asyncio.create_task(downlink())
+    try:
+        await uplink()
     except WebSocketDisconnect:
         pass
     finally:
+        down.cancel()
         mic.unsubscribe(queue)
+        if speaker and talking:
+            speaker.close()
 
 
 @app.get('/api/stats')

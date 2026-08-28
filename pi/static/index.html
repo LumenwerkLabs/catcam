@@ -52,7 +52,10 @@
   }
   .audio input[type=range] { flex: 1; accent-color: var(--accent); cursor: pointer; min-width: 0; }
   .audio input[type=range]:disabled { opacity: .35; cursor: default; }
-  #listen.on { border-color: var(--accent); color: var(--accent); }
+  #listen.on, #talk.on { border-color: var(--accent); color: var(--accent); }
+  #talk { touch-action: none; }
+  #talk.on { background: var(--accent); color: #131318; }
+  #talk:disabled { opacity: .35; cursor: default; }
   #cams { margin-top: .75rem; padding-top: .5rem; border-top: 1px solid var(--line); }
   .ctl {
     display: flex; align-items: center; gap: .75rem;
@@ -104,6 +107,7 @@
 
   <div class="audio">
     <button id="listen">Escuchar</button>
+    <button id="talk" disabled>Hablar</button>
     <input type="range" id="vol" min="0" max="100" value="80"
            aria-label="Volumen" disabled>
     <span id="audioMsg"></span>
@@ -307,11 +311,13 @@ function stopAudio(msg) {
   listen.classList.remove('on');
   listen.textContent = 'Escuchar';
   vol.disabled = true;
+  talk.classList.remove('on');
+  talk.disabled = true;
   audioMsg.textContent = msg || '';
 }
 
 async function startAudio() {
-  actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+  actx = actx || new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
   await actx.resume();
   if (!gain) {
     gain = actx.createGain();
@@ -337,9 +343,78 @@ async function startAudio() {
   listen.classList.add('on');
   listen.textContent = 'Silenciar';
   vol.disabled = false;
+  talk.disabled = false;
 }
 
 listen.onclick = () => (sock ? stopAudio() : startAudio());
+
+// -- hablar (push to talk) --------------------------------------------
+// getUserMedia sólo existe en contexto seguro: por http:// desde otra máquina
+// no hay micrófono ni aviso, hace falta HTTPS (o abrirlo en localhost).
+const talk = document.getElementById('talk');
+let micStream = null, tap = null;
+
+const TAP_WORKLET = `
+class Tap extends AudioWorkletProcessor {
+  process(inputs) {
+    const ch = inputs[0][0];
+    if (ch) this.port.postMessage(new Float32Array(ch));
+    return true;
+  }
+}
+registerProcessor('tap', Tap);
+`;
+
+async function openMic() {
+  if (tap) return true;
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    audioMsg.textContent = 'hace falta https';
+    return false;
+  }
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+    });
+  } catch (e) {
+    audioMsg.textContent = 'sin permiso de micrófono';
+    return false;
+  }
+  const url = URL.createObjectURL(new Blob([TAP_WORKLET], { type: 'application/javascript' }));
+  await actx.audioWorklet.addModule(url);
+  URL.revokeObjectURL(url);
+  tap = new AudioWorkletNode(actx, 'tap');
+  tap.port.onmessage = ev => {
+    if (!talk.classList.contains('on') || !sock || sock.readyState !== 1) return;
+    const f32 = ev.data, pcm = new Int16Array(f32.length);
+    for (let i = 0; i < f32.length; i++) {
+      const v = Math.max(-1, Math.min(1, f32[i]));
+      pcm[i] = v * 32767;
+    }
+    sock.send(pcm.buffer);
+  };
+  actx.createMediaStreamSource(micStream).connect(tap);
+  return true;
+}
+
+async function startTalk(ev) {
+  if (ev) ev.preventDefault();
+  if (!sock || sock.readyState !== 1 || talk.classList.contains('on')) return;
+  if (!await openMic()) return;
+  talk.classList.add('on');
+  sock.send(JSON.stringify({ talk: true }));
+}
+
+function stopTalk() {
+  if (!talk.classList.contains('on')) return;
+  talk.classList.remove('on');
+  if (sock && sock.readyState === 1) sock.send(JSON.stringify({ talk: false }));
+}
+
+talk.addEventListener('pointerdown', startTalk);
+talk.addEventListener('pointerup', stopTalk);
+talk.addEventListener('pointercancel', stopTalk);
+talk.addEventListener('pointerleave', stopTalk);
+addEventListener('blur', stopTalk);   // si se va el foco, soltamos el botón
 vol.oninput = () => { if (gain) gain.gain.value = vol.value / 100; };
 
 // -- controles de la cámara -------------------------------------------

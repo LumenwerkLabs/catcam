@@ -6,12 +6,15 @@ de audio al proyecto.
 """
 
 import asyncio
+import queue as queuelib
 import subprocess
 import threading
 
 # Por nombre y no plughw:3,0: el número de card se mueve entre reboots, igual
 # que pasaba con /dev/video0.
 DEVICE = 'plughw:CARD=C200,DEV=0'
+# La C200 no tiene parlante: la salida es el jack de 3,5 de la Pi.
+OUT_DEVICE = 'plughw:CARD=Headphones,DEV=0'
 RATE = 16000        # voz clara a 256 kbit/s, ~1% de lo que gasta el video
 CHANNELS = 1
 CHUNK_MS = 60
@@ -117,6 +120,83 @@ class Microphone:
         return {'chunks': self.chunks, 'rate': self.rate,
                 'channels': self.channels, 'subscribers': len(self._subs),
                 'error': None if self.error is None else str(self.error)}
+
+
+class Speaker:
+    """Reproduce PCM del navegador por el jack de la Pi.
+
+    Las escrituras entran desde el event loop, así que no pueden bloquear: van
+    a una cola y un hilo se las pasa a aplay. Si el cliente manda más rápido de
+    lo que el device consume, se pierde lo viejo en vez de trabar el server.
+    """
+
+    def __init__(self, device=OUT_DEVICE, rate=RATE, channels=CHANNELS):
+        self.device = device
+        self.rate = rate
+        self.channels = channels
+        self.error = None
+        self._queue = queuelib.Queue(maxsize=32)
+        self._proc = None
+        self._thread = None
+        self._stop = threading.Event()
+        self._lock = threading.Lock()
+
+    def open(self):
+        with self._lock:
+            if self._thread is not None:
+                return
+            cmd = ['aplay', '-D', self.device, '-f', 'S16_LE',
+                   '-r', str(self.rate), '-c', str(self.channels), '-t', 'raw', '-q']
+            self._stop.clear()
+            self._proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
+                                          stderr=subprocess.PIPE,
+                                          start_new_session=True)
+            self._thread = threading.Thread(target=self._drain, daemon=True)
+            self._thread.start()
+            self.error = None
+
+    def write(self, pcm):
+        try:
+            self._queue.put_nowait(pcm)
+        except queuelib.Full:
+            pass        # audio en vivo: lo que llegó tarde ya no sirve
+
+    def _drain(self):
+        while not self._stop.is_set():
+            try:
+                pcm = self._queue.get(timeout=0.2)
+            except queuelib.Empty:
+                continue
+            try:
+                self._proc.stdin.write(pcm)
+                self._proc.stdin.flush()
+            except OSError as exc:
+                self.error = exc
+                print('audio out:', exc)
+                return
+
+    def close(self):
+        with self._lock:
+            self._stop.set()
+            thread, self._thread = self._thread, None
+            proc, self._proc = self._proc, None
+        if thread:
+            thread.join(timeout=1)
+        if proc:
+            try:
+                proc.stdin.close()
+            except OSError:
+                pass
+            try:
+                proc.terminate()
+                proc.wait(timeout=1)
+            except Exception:
+                pass
+        while not self._queue.empty():
+            try:
+                self._queue.get_nowait()
+            except queuelib.Empty:
+                break
 
 
 if __name__ == '__main__':

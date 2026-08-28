@@ -71,7 +71,7 @@ cuts PWM to the servo to stop the idle jitter.
 | `POST /api/home` | –                 | `{"angle": 90}`   |
 | `GET /api/stream` | –                | MJPEG (`multipart/x-mixed-replace`) |
 | `GET /api/snapshot` | –              | a single `image/jpeg` |
-| `WS /api/audio` | –                  | JSON format header, then raw s16le PCM chunks |
+| `WS /api/audio` | binary PCM up, `{"talk": bool}` | JSON format header, then raw s16le PCM chunks down |
 | `GET /api/stats` | –                 | capture counters, frame age, subscriber count |
 | `GET /api/controls` | –              | state of every adjustable camera control |
 | `POST /api/controls/{name}` | `{"auto": true}` or `{"value": n}` | the control's new state |
@@ -142,13 +142,22 @@ out. Audio and video are separate streams with no sync between them, so they
 drift by ~100 ms.
 
 The camera has **no speaker** — `aplay -l` lists only HDMI and the Pi's 3.5 mm
-jack — so talkback needs its own output hardware, and browsers only grant
-microphone access over HTTPS.
+jack — so talkback plays through `plughw:CARD=Headphones,DEV=0`, which needs a
+powered speaker in that jack.
+
+Talkback is push-to-talk over the same WebSocket: the browser captures at
+16 kHz through an `AudioWorklet` and sends raw PCM up while the button is held.
+It's half duplex on purpose — while you talk, the server stops sending the
+microphone back, so you don't hear yourself delayed and the two ends can't
+feed back. Writes to `aplay` go through a bounded queue on their own thread,
+because a blocking pipe write from the event loop would stall every other
+request.
+
+The browser only exposes a microphone in a **secure context**, so talkback
+needs HTTPS (`tailscale serve`) or `localhost` on the Pi itself. Over plain
+`http://` from another machine it fails silently, with no permission prompt.
 
 ## Not done yet
-
-Talkback (browser microphone → the Pi's 3.5 mm jack) isn't built; it needs
-HTTPS and a powered speaker.
 
 Tilt is unimplemented; only pan exists. The C200 does expose `tilt_absolute`
 over UVC (±10°, digital), which would give a limited tilt with no second servo.
