@@ -69,8 +69,8 @@ cuts PWM to the servo to stop the idle jitter.
 | `POST /api/home` | –                 | `{"angle": 90}`   |
 | `GET /api/stream` | –                | MJPEG (`multipart/x-mixed-replace`) |
 | `GET /api/snapshot` | –              | a single `image/jpeg` |
-| `GET /api/focus` | –                 | `{"auto": false, "value": 300, "min": 300, "max": 650}` |
-| `POST /api/focus` | `{"auto": true}` or `{"value": 300-650}` | the new focus state |
+| `GET /api/controls` | –              | state of every adjustable camera control |
+| `POST /api/controls/{name}` | `{"auto": true}` or `{"value": n}` | the control's new state |
 
 A `502` means the Pico answered with something other than `OK`.
 
@@ -97,11 +97,19 @@ Your user must be in the `video` group (`sudo usermod -aG video $USER`, then log
 out and back in). Under systemd, also set `SupplementaryGroups=video` and
 `PrivateDevices=no` — the latter hides `/dev/video*` outright.
 
-Autofocus is pinned off in `CONTROLS`, since it hunts on every pan, but the UI
-can drive it live over `/api/focus` — a manual slider over `focus_absolute`
-(300–650) plus an auto toggle. Whatever you pick is written back into
-`CONTROLS`, so it survives the camera being unplugged and reconnecting. Set
+Autofocus is pinned off in `CONTROLS`, since it hunts on every pan. Set
 `power_line_frequency` to `2` if you're on 60 Hz mains.
+
+The `ADJUSTABLE` table in `camera.py` decides which UVC controls the UI can
+drive live — focus (with an auto toggle), zoom, and tilt. The browser builds
+its sliders from `/api/controls`, so adding a control there needs no frontend
+change. Whatever you set is written back into `CONTROLS`, so it survives the
+camera being unplugged and reconnecting.
+
+Zoom and tilt are digital, done by cropping the sensor: tilt is `±10°` in 1°
+steps and generally only bites once you're zoomed past 1×, since at 1× there's
+no margin left to crop into. `pan_absolute` exists too but isn't exposed — the
+servo already pans 0–180°.
 
 ## Not done yet
 

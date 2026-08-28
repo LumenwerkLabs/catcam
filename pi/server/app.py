@@ -6,7 +6,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from camera import Camera
+from camera import ADJUSTABLE, Camera
 from pico_link import PicoLink
 
 STATIC_DIR = '../static'
@@ -89,22 +89,24 @@ def _camera():
     return camera
 
 
-@app.get('/api/focus')
-def get_focus():
-    state = _camera().focus()
-    if state is None:
+@app.get('/api/controls')
+def get_controls():
+    state = _camera().controls_state()
+    if any(v is None for v in state.values()):
         raise HTTPException(503, 'la cámara no está abierta')
     return state
 
 
-@app.post('/api/focus')
-def set_focus(req: FocusRequest):
+@app.post('/api/controls/{name}')
+def set_control(name: str, req: ControlRequest):
+    if name not in ADJUSTABLE:
+        raise HTTPException(404, 'no existe el control {!r}'.format(name))
     cam = _camera()
     try:
-        cam.set_focus(value=req.value, auto=req.auto)
+        cam.set_control(name, value=req.value, auto=req.auto)
     except (OSError, RuntimeError, KeyError) as exc:
         raise HTTPException(502, 'la cámara rechazó el control: {}'.format(exc))
-    return cam.focus()
+    return cam.control(name)
 
 
 @app.get('/api/snapshot')

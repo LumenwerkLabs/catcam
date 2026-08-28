@@ -45,15 +45,16 @@
     border: 1px solid var(--line); background: #24232b; color: inherit; cursor: pointer;
   }
   button:hover { border-color: #4a4954; }
-  .focus {
+  #cams { margin-top: .75rem; padding-top: .5rem; border-top: 1px solid var(--line); }
+  .ctl {
     display: flex; align-items: center; gap: .75rem;
-    margin-top: .75rem; padding-top: .75rem; border-top: 1px solid var(--line);
-    font-size: .9rem; color: var(--dim);
+    margin-top: .5rem; font-size: .9rem; color: var(--dim);
   }
-  .focus label { display: flex; align-items: center; gap: .4rem; cursor: pointer; white-space: nowrap; }
-  .focus input[type=range] { flex: 1; accent-color: var(--accent); cursor: pointer; }
-  .focus input[type=range]:disabled { opacity: .35; cursor: default; }
-  .focus output { font-variant-numeric: tabular-nums; color: var(--fg); min-width: 3ch; text-align: right; }
+  .ctl > .name { width: 6.5rem; flex: none; }
+  .ctl input[type=range] { flex: 1; accent-color: var(--accent); cursor: pointer; min-width: 0; }
+  .ctl input[type=range]:disabled { opacity: .35; cursor: default; }
+  .ctl output { font-variant-numeric: tabular-nums; color: var(--fg); width: 3.5rem; text-align: right; }
+  .ctl label { display: flex; align-items: center; gap: .3rem; cursor: pointer; white-space: nowrap; }
   .tick { stroke: var(--line); }
   .tick.major { stroke: #55535e; }
   .lbl { fill: var(--dim); font-size: 11px; font-variant-numeric: tabular-nums; }
@@ -93,12 +94,7 @@
     </div>
   </div>
 
-  <div class="focus">
-    <label><input type="checkbox" id="af"> Autofoco</label>
-    <input type="range" id="focus" min="300" max="650" step="5"
-           aria-label="Foco manual" disabled>
-    <output id="focusVal">–</output>
-  </div>
+  <div id="cams"></div>
 </div>
 
 <script>
@@ -262,43 +258,66 @@ document.addEventListener('visibilitychange', () => {
 video.onclick = () => { backoff = 1000; connect(); };
 connect();
 
-// -- foco -------------------------------------------------------------
-// focus_absolute queda inactive mientras corre el autofoco, así que el server
-// lo apaga solo cuando mandamos un valor.
-const af = document.getElementById('af');
-const focus = document.getElementById('focus');
-const focusVal = document.getElementById('focusVal');
-let focusTimer = null;
+// -- controles de la cámara -------------------------------------------
+// Las filas se arman con lo que reporta /api/controls, así agregar un control
+// en el server no toca este archivo.
+const cams = document.getElementById('cams');
 
-function showFocus(state) {
-  af.checked = state.auto;
-  focus.disabled = state.auto;
-  focus.value = state.value;
-  focusVal.textContent = state.auto ? 'auto' : state.value;
-}
+const fmt = (c, v) => {
+  const n = v / c.scale;
+  return (c.scale === 1 ? n : n.toFixed(1).replace(/\.0$/, '')) + c.suffix;
+};
 
-async function postFocus(body) {
+async function postControl(name, body, row) {
   try {
-    const res = await fetch('/api/focus', {
+    const res = await fetch('/api/controls/' + name, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
     });
-    if (res.ok) showFocus(await res.json());
-  } catch (e) { /* la cámara puede no estar; el próximo intento reintenta */ }
+    if (res.ok) row.show(await res.json());
+  } catch (e) { /* la cámara puede no estar */ }
 }
 
-focus.addEventListener('input', () => {
-  focusVal.textContent = focus.value;
-  clearTimeout(focusTimer);   // arrastrar el slider si no dispara un POST por píxel
-  focusTimer = setTimeout(() => postFocus({ value: +focus.value }), 120);
-});
-af.addEventListener('change', () => {
-  focus.disabled = af.checked;
-  postFocus(af.checked ? { auto: true } : { value: +focus.value });
-});
+function addRow(c) {
+  const row = document.createElement('div');
+  row.className = 'ctl';
+  row.innerHTML =
+    `<span class="name">${c.label}</span>` +
+    (c.has_auto ? '<label><input type="checkbox"> auto</label>' : '') +
+    `<input type="range" min="${c.min}" max="${c.max}" step="${c.step}"
+            aria-label="${c.label}">` +
+    '<output></output>';
+  cams.appendChild(row);
 
-fetch('/api/focus').then(r => r.ok && r.json().then(showFocus)).catch(() => {});
+  const auto = row.querySelector('input[type=checkbox]');
+  const range = row.querySelector('input[type=range]');
+  const out = row.querySelector('output');
+  let timer = null;
+
+  row.show = state => {
+    if (auto) { auto.checked = state.auto; range.disabled = state.auto; }
+    range.value = state.value;
+    out.textContent = state.auto ? 'auto' : fmt(c, state.value);
+  };
+
+  range.addEventListener('input', () => {
+    out.textContent = fmt(c, +range.value);
+    clearTimeout(timer);   // un POST al soltar, no uno por píxel
+    timer = setTimeout(() => postControl(c.name, { value: +range.value }, row), 120);
+  });
+  if (auto) auto.addEventListener('change', () => {
+    range.disabled = auto.checked;
+    postControl(c.name, auto.checked ? { auto: true } : { value: +range.value }, row);
+  });
+
+  row.show(c);
+}
+
+fetch('/api/controls')
+  .then(r => r.ok ? r.json() : Promise.reject())
+  .then(all => Object.values(all).forEach(addRow))
+  .catch(() => {});
 
 document.getElementById('left').onclick = () => setAngle(angle - 10);
 document.getElementById('right').onclick = () => setAngle(angle + 10);

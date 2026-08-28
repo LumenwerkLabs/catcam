@@ -21,7 +21,20 @@ RETRY_S = 2.0
 # La C200 trae autofoco y auto-exposición: al panear se ponen a buscar y se ve
 # el pumping. focus_absolute va de 300 a 650; probá los dos extremos y quedate
 # con el que enfoque a distancia de habitación.
-FOCUS_MIN, FOCUS_MAX = 300, 650
+# Lo que exponemos por HTTP: control V4L2, rango, paso, escala y sufijo para
+# mostrar, y el control de "automático" si lo tiene. Los rangos son los que
+# reporta la C200 — otra cámara necesita otros números.
+# El pan digital existe (pan_absolute) pero no lo exponemos: el servo ya panea
+# 0-180°, contra los ±10° del recorte de sensor.
+ADJUSTABLE = {
+    'focus': {'ctl': 'focus_absolute', 'min': 300, 'max': 650, 'step': 5,
+              'scale': 1, 'suffix': '', 'label': 'Foco',
+              'auto': 'focus_automatic_continuous'},
+    'zoom': {'ctl': 'zoom_absolute', 'min': 100, 'max': 400, 'step': 5,
+             'scale': 100, 'suffix': '×', 'label': 'Zoom', 'auto': None},
+    'tilt': {'ctl': 'tilt_absolute', 'min': -36000, 'max': 36000, 'step': 3600,
+             'scale': 3600, 'suffix': '°', 'label': 'Inclinación', 'auto': None},
+}
 
 CONTROLS = {
     'power_line_frequency': 1,          # 1 = 50 Hz, 2 = 60 Hz
@@ -142,35 +155,47 @@ class Camera:
         except asyncio.QueueFull:
             pass
 
-    # -- foco -------------------------------------------------------------
+    # -- controles de la cámara -------------------------------------------
 
-    def focus(self):
-        """Estado actual, o None si la cámara no está abierta."""
+    def control(self, name):
+        """Estado de un control, o None si la cámara no está abierta."""
+        spec = ADJUSTABLE[name]
         with self._devlock:
             if self._dev is None:
                 return None
-            auto = self._dev.controls['focus_automatic_continuous'].value
-            value = self._dev.controls['focus_absolute'].value
-        return {'auto': bool(auto), 'value': value,
-                'min': FOCUS_MIN, 'max': FOCUS_MAX}
+            value = self._dev.controls[spec['ctl']].value
+            auto = bool(self._dev.controls[spec['auto']].value) if spec['auto'] else False
+        state = {k: spec[k] for k in ('min', 'max', 'step', 'scale', 'suffix', 'label')}
+        state.update(name=name, value=value, auto=auto,
+                     has_auto=spec['auto'] is not None)
+        return state
 
-    def set_focus(self, value=None, auto=None):
-        """focus_absolute está inactive mientras el AF corre: hay que apagarlo
-        primero. Guardamos lo elegido en self.controls para que sobreviva a una
+    def controls_state(self):
+        return {n: self.control(n) for n in ADJUSTABLE}
+
+    def set_control(self, name, value=None, auto=None):
+        """Lo elegido se guarda en self.controls para que sobreviva a una
         reconexión de la cámara."""
+        spec = ADJUSTABLE[name]
         with self._devlock:
             if self._dev is None:
                 raise RuntimeError('la cámara no está abierta')
-            if auto:
-                self._dev.controls['focus_automatic_continuous'].value = 1
-                self.controls['focus_automatic_continuous'] = 1
-            else:
-                self._dev.controls['focus_automatic_continuous'].value = 0
-                self.controls['focus_automatic_continuous'] = 0
-                if value is not None:
-                    value = max(FOCUS_MIN, min(FOCUS_MAX, int(value)))
-                    self._dev.controls['focus_absolute'].value = value
-                    self.controls['focus_absolute'] = value
+            if spec['auto']:
+                # focus_absolute queda inactive mientras corre el AF: para
+                # escribirlo hay que apagarlo primero.
+                on = 1 if auto else 0
+                self._dev.controls[spec['auto']].value = on
+                self.controls[spec['auto']] = on
+                if on:
+                    return
+            if value is not None:
+                value = max(spec['min'], min(spec['max'], int(value)))
+                if spec['step'] > 1:
+                    # tilt_absolute avanza de a 3600: el driver rechaza
+                    # cualquier valor fuera de la grilla.
+                    value = round(value / spec['step']) * spec['step']
+                self._dev.controls[spec['ctl']].value = value
+                self.controls[spec['ctl']] = value
 
     # -- consumo ---------------------------------------------------------
 
