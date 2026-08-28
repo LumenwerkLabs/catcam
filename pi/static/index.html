@@ -1,130 +1,558 @@
 <!DOCTYPE html>
-<html lang="es">
+<html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f5f6f7" id="themeColor">
 <title>catcam</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
+  /* ---- tokens -------------------------------------------------------
+     Dos colores de señal, con significado: verde = recibimos (video en
+     vivo, escuchando, sobre el eje), ámbar = transmitimos (hablar) o el
+     comando quedó sin confirmar. Nada más lleva color. */
   :root {
+    --paper:   #f5f6f7;
+    --surface: #ffffff;
+    --sunken:  #eef0f1;
+    --ink:     #13171a;
+    --muted:   #6a7278;
+    --line:    #e3e6e8;
+    --edge:    #d3d8db;
+    --rx:      #0f8a6c;
+    --rx-soft: rgba(15, 138, 108, .12);
+    --tx:      #c77a18;
+    --shadow:  0 1px 2px rgba(19, 23, 26, .05), 0 8px 24px -12px rgba(19, 23, 26, .18);
+    --r-card:  20px;
+    --r-ctl:   12px;
+    color-scheme: light;
+  }
+  :root[data-theme="dark"] {
+    --paper:   #0d1012;
+    --surface: #15191c;
+    --sunken:  #1c2226;
+    --ink:     #e9ecee;
+    --muted:   #8b9399;
+    --line:    #242a2e;
+    --edge:    #333b40;
+    --rx:      #2ed3a4;
+    --rx-soft: rgba(46, 211, 164, .14);
+    --tx:      #e9a63a;
+    --shadow:  0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px -12px rgba(0, 0, 0, .7);
     color-scheme: dark;
-    --bg: #131318; --panel: #1c1c22; --line: #33323b;
-    --fg: #e9e7e2; --dim: #75736d; --accent: #f0a93c; --warn: #d85a30;
   }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper:   #0d1012;
+      --surface: #15191c;
+      --sunken:  #1c2226;
+      --ink:     #e9ecee;
+      --muted:   #8b9399;
+      --line:    #242a2e;
+      --edge:    #333b40;
+      --rx:      #2ed3a4;
+      --rx-soft: rgba(46, 211, 164, .14);
+      --tx:      #e9a63a;
+      --shadow:  0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px -12px rgba(0, 0, 0, .7);
+      color-scheme: dark;
+    }
+  }
+
   * { box-sizing: border-box; }
+
   body {
-    margin: 0; padding: 1.25rem;
-    font: 16px/1.5 system-ui, -apple-system, sans-serif;
-    background: var(--bg); color: var(--fg);
-    display: flex; flex-direction: column; align-items: center; gap: 1.25rem;
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font: 400 16px/1.5 "Instrument Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    padding: 0 1rem env(safe-area-inset-bottom) 1rem;
+    transition: background-color .25s ease, color .25s ease;
   }
-  #video {
-    width: 100%; max-width: 620px; aspect-ratio: 16/9;
-    background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
-    overflow: hidden; cursor: pointer;
-    display: grid; place-items: center; color: var(--dim); font-size: .9rem;
+
+  .mono {
+    font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-variant-numeric: tabular-nums;
   }
-  #feed, #videoMsg { grid-area: 1 / 1; }
+  .cap {
+    font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: .6875rem; letter-spacing: .1em; text-transform: uppercase; color: var(--muted);
+  }
+
+  /* ---- arranque ----
+     El gato se banca 3 s aunque el Pi conteste al toque: la conexión al
+     stream arranca igual detrás del velo, así la espera no cuesta nada. */
+  .boot {
+    position: fixed; inset: 0; z-index: 50;
+    background: var(--paper); color: var(--ink);
+    display: grid; align-content: center; justify-items: center; gap: 1.25rem;
+    transition: opacity .45s ease;
+  }
+  .boot .nyan { width: min(70vw, 340px); }
+  .boot.done { opacity: 0; pointer-events: none; }
+  .boot[hidden] { display: none; }
+
+  /* ---- barra superior ---- */
+  .topbar {
+    position: sticky; top: 0; z-index: 10;
+    display: flex; align-items: center; gap: .75rem 1rem; flex-wrap: wrap;
+    max-width: 1180px; margin: 0 auto;
+    padding: .875rem .25rem;
+    background: var(--paper);
+    background: color-mix(in srgb, var(--paper) 82%, transparent);
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  }
+  .brand { display: flex; align-items: center; gap: .5rem; font-weight: 600; letter-spacing: -.01em; }
+  .lens {
+    width: 15px; height: 15px; border-radius: 50%; flex: none;
+    border: 2px solid var(--rx); background: var(--surface);
+    box-shadow: inset 0 0 0 2.5px var(--paper);
+  }
+
+  .status {
+    display: flex; align-items: center; gap: .45rem;
+    margin-left: auto;
+    padding: .3rem .7rem .3rem .55rem;
+    border: 1px solid var(--line); border-radius: 999px;
+    background: var(--surface);
+    white-space: nowrap;
+  }
+  .status .dot {
+    width: 7px; height: 7px; border-radius: 50%; flex: none;
+    background: var(--muted); transition: background-color .2s ease;
+  }
+  .status[data-state="live"] .dot { background: var(--rx); animation: breathe 2.4s ease-in-out infinite; }
+  .status[data-state="warn"] .dot { background: var(--tx); }
+  .status[data-state="live"] { border-color: color-mix(in srgb, var(--rx) 35%, var(--line)); }
+  button.btn.rx { border-color: var(--rx); }
+  @keyframes breathe {
+    0%, 100% { box-shadow: 0 0 0 0 var(--rx-soft); }
+    50%      { box-shadow: 0 0 0 5px transparent; }
+  }
+
+  /* ---- selector de tema ---- */
+  .theme {
+    position: relative; display: flex; flex: none;
+    padding: 3px; border: 1px solid var(--line); border-radius: 999px; background: var(--sunken);
+  }
+  .theme button {
+    position: relative; z-index: 1;
+    border: 0; background: none; cursor: pointer; color: var(--muted);
+    padding: .3rem .6rem; border-radius: 999px;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .625rem; letter-spacing: .08em; text-transform: uppercase;
+    transition: color .2s ease;
+  }
+  .theme button[aria-pressed="true"] { color: var(--ink); }
+  .theme .glider {
+    position: absolute; top: 3px; bottom: 3px; left: 0;
+    border-radius: 999px; background: var(--surface);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, .12);
+    transition: transform .28s cubic-bezier(.32, .72, 0, 1), width .28s cubic-bezier(.32, .72, 0, 1);
+  }
+
+  /* ---- escenario ---- */
+  .stage {
+    max-width: 1180px; margin: 0 auto;
+    display: grid; gap: 1rem; grid-template-columns: 1fr;
+  }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--r-card);
+    box-shadow: var(--shadow);
+  }
+
+  /* ---- video ---- */
+  .viewport {
+    position: relative; overflow: hidden; cursor: pointer;
+    aspect-ratio: 16 / 9; background: var(--sunken);
+    display: grid; place-items: center;
+  }
+  #feed, .loader { grid-area: 1 / 1; }
   #feed { width: 100%; height: 100%; object-fit: cover; display: block; }
-  #video.live #videoMsg { display: none; }
-  #video:not(.live) #feed { visibility: hidden; }
-  .console {
-    width: 100%; max-width: 620px;
-    background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
-    padding: 1rem 1rem .75rem;
+  .viewport.live .loader { display: none; }
+  .viewport:not(.live) #feed { visibility: hidden; }
+
+  /* ---- estado de carga: nyan cat en blanco y negro ----
+     Todo el gato se dibuja con currentColor, así el mismo SVG sirve en claro
+     y en oscuro sin tocar un solo fill. */
+  .loader {
+    display: grid; justify-items: center; gap: .9rem;
+    color: var(--ink); padding: 1rem;
   }
+  .nyan { width: min(62%, 300px); height: auto; }
+  #videoMsg { color: var(--muted); font-size: .875rem; }
+
+  /* --nyanBg es el color que "perfora" el gato: la pop tart y la cara son
+     huecos, no pintura, así el mismo dibujo cae bien sobre cualquier fondo. */
+  .loader .nyan { --nyanBg: var(--sunken); }
+  .boot   .nyan { --nyanBg: var(--paper); }
+
+  .nyan .ink   { fill: currentColor; }
+  .nyan .hole  { fill: var(--nyanBg); }
+  .nyan .tart  { fill: var(--nyanBg); stroke: currentColor; stroke-width: 4.5; }
+  .nyan .crumb { fill: currentColor; opacity: .45; }
+  .nyan .cheek { fill: var(--nyanBg); opacity: .28; }
+  .nyan .stars, .nyan .trail { fill: currentColor; }
+
+  /* La estela: seis bandas en grises. Las columnas pares e impares suben y
+     bajan en contrafase, que es lo que da el zigzag del original. */
+  .nyan .band1 { opacity: 1; }   .nyan .band2 { opacity: .78; }
+  .nyan .band3 { opacity: .6; }  .nyan .band4 { opacity: .44; }
+  .nyan .band5 { opacity: .3; }  .nyan .band6 { opacity: .18; }
+
+  .nyan .colA { animation: nyanTrail .34s steps(1) infinite alternate; }
+  .nyan .colB { animation: nyanTrail .34s steps(1) infinite alternate-reverse; }
+  @keyframes nyanTrail { from { transform: translateY(0); } to { transform: translateY(4px); } }
+
+  .nyan .cat  { animation: nyanBob .34s steps(1) infinite alternate; }
+  @keyframes nyanBob { from { transform: translateY(0); } to { transform: translateY(-3px); } }
+
+  .nyan .legA { animation: nyanLeg .26s steps(1) infinite alternate; }
+  .nyan .legB { animation: nyanLeg .26s steps(1) infinite alternate-reverse; }
+  @keyframes nyanLeg { from { transform: translateY(0); } to { transform: translateY(4px); } }
+
+  .nyan .star { animation: nyanStar 1s steps(3) infinite; transform-box: fill-box; transform-origin: center; }
+  .nyan .star:nth-of-type(2) { animation-delay: -.33s; }
+  .nyan .star:nth-of-type(3) { animation-delay: -.66s; }
+  .nyan .star:nth-of-type(4) { animation-delay: -.16s; }
+  @keyframes nyanStar {
+    0%   { transform: scale(1);  opacity: .55; }
+    50%  { transform: scale(.3); opacity: .2; }
+    100% { transform: scale(1);  opacity: .55; }
+  }
+  .viewport::after {
+    content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .06);
+  }
+
+  /* ---- panel de control ---- */
+  .rail { display: grid; gap: 1rem; align-content: start; }
+  .panel { padding: 1.125rem 1.125rem 1rem; }
+
   #dial { display: block; width: 100%; height: auto; touch-action: none; user-select: none; cursor: grab; }
   #dial:active { cursor: grabbing; }
-  #dial:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 10px; }
-  .bar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-top: .5rem; }
-  .readout { font-variant-numeric: tabular-nums; font-size: 1.75rem; letter-spacing: -.02em; }
-  .readout small { font-size: .8rem; color: var(--dim); letter-spacing: .08em; text-transform: uppercase; display: block; }
-  .readout.stale { color: var(--warn); }
-  .actions { display: flex; gap: .5rem; }
-  button {
-    font: inherit; font-size: .9rem; padding: .5rem 1rem; border-radius: 8px;
-    border: 1px solid var(--line); background: #24232b; color: inherit; cursor: pointer;
+  #dial:focus-visible { outline: 2px solid var(--rx); outline-offset: 4px; border-radius: var(--r-ctl); }
+  .track { stroke: var(--sunken); }
+  .arc   { stroke: var(--rx); transition: stroke .25s ease; }
+  .stale .arc { stroke: var(--tx); }
+  .tick  { stroke: var(--edge); }
+  .tick.major { stroke: var(--muted); }
+  .lbl   { fill: var(--muted); font-size: 11px; }
+  #beamFade stop { stop-color: var(--rx); transition: stop-color .25s ease; }
+  .stale #beamFade stop { stop-color: var(--tx); }
+  #knob  { fill: var(--rx); transition: fill .25s ease, r .18s cubic-bezier(.32, .72, 0, 1); }
+  .stale #knob { fill: var(--tx); }
+  #dial:active #knob { r: 14.5; }
+  #knobDot { fill: var(--surface); }
+  .lensBody { fill: var(--sunken); stroke: var(--edge); }
+  .glass { fill: var(--surface); stroke: var(--rx); }
+  .sight { stroke: var(--rx); transition: stroke .25s ease; }
+  .stale .sight { stroke: var(--tx); }
+
+  .bar { display: flex; align-items: flex-end; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+  .readout { line-height: 1.05; }
+  .readout .deg {
+    display: block; font-size: 2.5rem; font-weight: 500; letter-spacing: -.045em;
+    transition: color .25s ease;
   }
-  button:hover { border-color: #4a4954; }
-  .audio {
-    display: flex; align-items: center; gap: .75rem;
-    margin-top: .75rem; padding-top: .75rem; border-top: 1px solid var(--line);
-    font-size: .9rem; color: var(--dim);
+  .readout.stale .deg { color: var(--tx); }
+  .readout small { display: block; margin-top: .3rem; }
+  .actions { display: flex; gap: .4rem; }
+
+  button.btn {
+    font: inherit; font-size: .875rem; font-weight: 500;
+    padding: .5rem .85rem; border-radius: var(--r-ctl);
+    border: 1px solid var(--line); background: var(--surface); color: var(--ink);
+    cursor: pointer; white-space: nowrap;
+    transition: border-color .16s ease, background-color .16s ease, transform .16s ease, box-shadow .16s ease, color .16s ease;
   }
-  .audio input[type=range] { flex: 1; accent-color: var(--accent); cursor: pointer; min-width: 0; }
-  .audio input[type=range]:disabled { opacity: .35; cursor: default; }
-  #listen.on, #talk.on { border-color: var(--accent); color: var(--accent); }
+  button.btn:hover:not(:disabled) { border-color: var(--edge); box-shadow: var(--shadow); transform: translateY(-1px); }
+  button.btn:active:not(:disabled) { transform: translateY(0); box-shadow: none; }
+  button.btn:focus-visible { outline: 2px solid var(--rx); outline-offset: 2px; }
+  button.btn:disabled { opacity: .4; cursor: default; }
+  .ico { display: block; width: 18px; height: 18px; flex: none; }
+  button.btn.icon { padding: .5rem; width: 2.375rem; display: grid; place-items: center; }
+  button.btn.step { display: flex; align-items: center; gap: .15rem; padding: .5rem .7rem; }
+  #listen .i-on { display: none; }
+  #listen.rx .i-on { display: block; }
+  #listen.rx .i-off { display: none; }
+  button.btn.rx { border-color: color-mix(in srgb, var(--rx) 45%, var(--line)); background: var(--rx-soft); color: var(--rx); }
+  button.btn.tx { border-color: var(--tx); background: var(--tx); color: var(--surface); }
+
+  /* ---- audio ---- */
+  .group { padding: 1rem 1.125rem 1.125rem; }
+  .group > .cap { display: block; margin-bottom: .75rem; }
+  .audio { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+  .volume .ico { color: var(--muted); }
   #talk { touch-action: none; }
-  #talk.on { background: var(--accent); color: #131318; }
-  #talk:disabled { opacity: .35; cursor: default; }
-  #cams { margin-top: .75rem; padding-top: .5rem; border-top: 1px solid var(--line); }
-  .ctl {
-    display: flex; align-items: center; gap: .75rem;
-    margin-top: .5rem; font-size: .9rem; color: var(--dim);
+  .volume { display: flex; align-items: center; gap: .6rem; flex: 1 1 9rem; min-width: 0; margin-top: .25rem; }
+
+  input[type=range] {
+    flex: 1; min-width: 0; accent-color: var(--rx); cursor: pointer; height: 1.5rem;
   }
-  .ctl > .name { width: 6.5rem; flex: none; }
-  .ctl input[type=range] { flex: 1; accent-color: var(--accent); cursor: pointer; min-width: 0; }
-  .ctl input[type=range]:disabled { opacity: .35; cursor: default; }
-  .ctl output { font-variant-numeric: tabular-nums; color: var(--fg); width: 3.5rem; text-align: right; }
-  .ctl label { display: flex; align-items: center; gap: .3rem; cursor: pointer; white-space: nowrap; }
-  .tick { stroke: var(--line); }
-  .tick.major { stroke: #55535e; }
-  .lbl { fill: var(--dim); font-size: 11px; font-variant-numeric: tabular-nums; }
+  input[type=range]:disabled { opacity: .35; cursor: default; }
+  input[type=range]:focus-visible { outline: 2px solid var(--rx); outline-offset: 4px; border-radius: 999px; }
+  #audioMsg { color: var(--muted); font-size: .75rem; }
+
+  /* ---- controles de cámara ---- */
+  .cams { padding: 0; }
+  .cams[hidden] { display: none; }
+  .cams > summary {
+    list-style: none; cursor: pointer; user-select: none;
+    display: flex; align-items: center; gap: .5rem;
+    padding: 1rem 1.125rem;
+  }
+  .cams > summary::-webkit-details-marker { display: none; }
+  .cams > summary:focus-visible { outline: 2px solid var(--rx); outline-offset: -2px; border-radius: var(--r-card); }
+  .chev { margin-left: auto; color: var(--muted); transition: transform .22s cubic-bezier(.32, .72, 0, 1); }
+  .cams[open] .chev { transform: rotate(180deg); }
+  .rows { padding: 0 1.125rem 1rem; }
+  .ctl {
+    display: grid; grid-template-columns: 1fr auto; align-items: center;
+    gap: .1rem .75rem; padding: .55rem 0; border-top: 1px solid var(--line);
+  }
+  .ctl .name { font-size: .875rem; }
+  .ctl output { font-size: .8125rem; color: var(--muted); }
+  .ctl input[type=range] { grid-column: 1 / -1; }
+  .ctl label {
+    grid-column: 1 / -1; display: flex; align-items: center; gap: .4rem;
+    cursor: pointer; color: var(--muted); font-size: .75rem;
+  }
+  .ctl label input { accent-color: var(--rx); }
+
+  /* ---- dos columnas ---- */
+  @media (max-width: 560px) { .theme { margin-left: auto; } }
+
+  @media (min-width: 900px) {
+    .stage { grid-template-columns: minmax(0, 1.55fr) minmax(340px, 1fr); align-items: start; }
+    .viewport { position: sticky; top: 4.5rem; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: .01ms !important; animation-iteration-count: 1 !important;
+      transition-duration: .01ms !important;
+    }
+  }
 </style>
 </head>
 <body>
 
-<div id="video" title="Clic para reconectar">
-  <img id="feed" alt="Cámara">
-  <span id="videoMsg">conectando…</span>
+<div class="boot" id="boot" role="status" aria-live="polite">
+  <span class="cap">starting…</span>
 </div>
 
-<div class="console">
-  <svg id="dial" viewBox="0 0 360 232"
-       tabindex="0" role="slider"
-       aria-label="Orientación horizontal de la cámara"
-       aria-valuemin="0" aria-valuemax="180" aria-valuenow="90" aria-valuetext="90 grados, centro">
+<header class="topbar">
+  <div class="brand"><span class="lens"></span> catcam</div>
 
-    <path d="M 30 195 A 150 150 0 0 1 330 195" fill="none" stroke="#232229" stroke-width="26"/>
-    <g id="ticks"></g>
-    <path id="fov" fill="var(--accent)" fill-opacity=".16" stroke="var(--accent)" stroke-opacity=".35" stroke-width="1"/>
-    <line id="axis" x1="180" y1="195" x2="180" y2="60" stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="3 4"/>
-    <circle id="knob" cx="180" cy="45" r="11" fill="var(--accent)"/>
-    <circle id="knobDot" cx="180" cy="45" r="3.5" fill="#131318"/>
-    <g id="cam">
-      <rect x="167" y="182" width="26" height="18" rx="4" fill="#3d3b45" stroke="#55535e"/>
-      <circle cx="180" cy="191" r="4.5" fill="#131318" stroke="var(--accent)" stroke-width="1.5"/>
-    </g>
-  </svg>
+  <div class="status" id="status" data-state="wait">
+    <span class="dot"></span><span class="cap" id="statusText">connecting</span>
+  </div>
 
-  <div class="bar">
-    <div class="readout" id="readout">90°<small id="zone">centro</small></div>
-    <div class="actions">
-      <button id="left">← 10°</button>
-      <button id="home">Centrar</button>
-      <button id="right">10° →</button>
+  <div class="theme" role="group" aria-label="Theme">
+    <span class="glider" id="glider"></span>
+    <button data-set="light" aria-pressed="false" aria-label="Light theme" title="Light"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.6v2.2M12 19.2v2.2M2.6 12h2.2M19.2 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M18.7 5.3l-1.6 1.6M6.9 17.1l-1.6 1.6"/></svg></button>
+    <button data-set="dark"  aria-pressed="false" aria-label="Dark theme" title="Dark"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 14.6A8.6 8.6 0 0 1 9.4 3.5a8.6 8.6 0 1 0 11.1 11.1z"/></svg></button>
+    <button data-set="auto"  aria-pressed="true"  aria-label="Match system theme" title="Auto"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.4"/><path d="M12 3.6a8.4 8.4 0 0 1 0 16.8z" fill="currentColor" stroke="none"/></svg></button>
+  </div>
+</header>
+
+<main class="stage">
+
+  <section class="card viewport" id="video" title="Click to reconnect">
+    <img id="feed" alt="Camera">
+    <div class="loader">
+      <svg class="nyan" viewBox="0 0 240 104" role="img" aria-label="Loading">
+        <g class="stars">
+          <path class="star" d="M14 22h4v4h-4z M10 26h4v4h-4z M18 26h4v4h-4z M14 30h4v4h-4z"/>
+          <path class="star" d="M44 78h4v4h-4z M40 82h4v4h-4z M48 82h4v4h-4z M44 86h4v4h-4z"/>
+          <path class="star" d="M72 12h4v4h-4z M68 16h4v4h-4z M76 16h4v4h-4z M72 20h4v4h-4z"/>
+          <path class="star" d="M24 58h4v4h-4z M20 62h4v4h-4z M28 62h4v4h-4z M24 66h4v4h-4z"/>
+        </g>
+
+        <g class="trail">
+          <g class="colA"><rect class="band1" x="0"  y="34" width="16" height="5"/><rect class="band2" x="0"  y="40" width="16" height="5"/><rect class="band3" x="0"  y="46" width="16" height="5"/><rect class="band4" x="0"  y="52" width="16" height="5"/><rect class="band5" x="0"  y="58" width="16" height="5"/><rect class="band6" x="0"  y="64" width="16" height="5"/></g>
+          <g class="colB"><rect class="band1" x="16" y="34" width="16" height="5"/><rect class="band2" x="16" y="40" width="16" height="5"/><rect class="band3" x="16" y="46" width="16" height="5"/><rect class="band4" x="16" y="52" width="16" height="5"/><rect class="band5" x="16" y="58" width="16" height="5"/><rect class="band6" x="16" y="64" width="16" height="5"/></g>
+          <g class="colA"><rect class="band1" x="32" y="34" width="16" height="5"/><rect class="band2" x="32" y="40" width="16" height="5"/><rect class="band3" x="32" y="46" width="16" height="5"/><rect class="band4" x="32" y="52" width="16" height="5"/><rect class="band5" x="32" y="58" width="16" height="5"/><rect class="band6" x="32" y="64" width="16" height="5"/></g>
+          <g class="colB"><rect class="band1" x="48" y="34" width="16" height="5"/><rect class="band2" x="48" y="40" width="16" height="5"/><rect class="band3" x="48" y="46" width="16" height="5"/><rect class="band4" x="48" y="52" width="16" height="5"/><rect class="band5" x="48" y="58" width="16" height="5"/><rect class="band6" x="48" y="64" width="16" height="5"/></g>
+          <g class="colA"><rect class="band1" x="64" y="34" width="16" height="5"/><rect class="band2" x="64" y="40" width="16" height="5"/><rect class="band3" x="64" y="46" width="16" height="5"/><rect class="band4" x="64" y="52" width="16" height="5"/><rect class="band5" x="64" y="58" width="16" height="5"/><rect class="band6" x="64" y="64" width="16" height="5"/></g>
+          <g class="colB"><rect class="band1" x="80" y="34" width="18" height="5"/><rect class="band2" x="80" y="40" width="18" height="5"/><rect class="band3" x="80" y="46" width="18" height="5"/><rect class="band4" x="80" y="52" width="18" height="5"/><rect class="band5" x="80" y="58" width="18" height="5"/><rect class="band6" x="80" y="64" width="18" height="5"/></g>
+        </g>
+
+        <g class="cat">
+          <!-- cola y patas van primero: la pop tart les tapa el nacimiento -->
+          <rect class="ink" x="80" y="47" width="18" height="6" rx="3"/>
+          <g class="legA"><rect class="ink" x="100" y="66" width="12" height="16" rx="5"/><rect class="ink" x="136" y="66" width="12" height="16" rx="5"/></g>
+          <g class="legB"><rect class="ink" x="118" y="66" width="12" height="16" rx="5"/><rect class="ink" x="152" y="66" width="12" height="16" rx="5"/></g>
+
+          <!-- pop tart: hueca con borde, es lo que la separa de la cabeza -->
+          <rect class="tart" x="92" y="28" width="72" height="48" rx="11"/>
+          <g class="crumb">
+            <rect x="106" y="40" width="5" height="5" rx="1"/><rect x="124" y="36" width="5" height="5" rx="1"/>
+            <rect x="144" y="44" width="5" height="5" rx="1"/><rect x="112" y="58" width="5" height="5" rx="1"/>
+            <rect x="136" y="60" width="5" height="5" rx="1"/><rect x="152" y="32" width="5" height="5" rx="1"/>
+          </g>
+
+          <!-- cabeza -->
+          <path class="ink" d="M163 38l8-15 9 15z"/>
+          <path class="ink" d="M196 38l9-15 8 15z"/>
+          <rect class="ink" x="158" y="32" width="58" height="44" rx="13"/>
+          <circle class="cheek" cx="169" cy="60" r="6"/>
+          <circle class="cheek" cx="205" cy="60" r="6"/>
+          <g class="hole">
+            <rect x="173" y="47" width="8" height="8" rx="4"/>
+            <rect x="194" y="47" width="8" height="8" rx="4"/>
+            <rect x="178" y="62" width="19" height="3" rx="1.5"/>
+            <rect x="178" y="58" width="3" height="7" rx="1.5"/>
+            <rect x="194" y="58" width="3" height="7" rx="1.5"/>
+          </g>
+        </g>
+      </svg>
+      <span id="videoMsg">connecting…</span>
     </div>
-  </div>
+  </section>
 
-  <div class="audio">
-    <button id="listen">Escuchar</button>
-    <button id="talk">Hablar</button>
-    <input type="range" id="vol" min="0" max="100" value="80"
-           aria-label="Volumen" disabled>
-    <span id="audioMsg"></span>
-  </div>
+  <div class="rail">
 
-  <div id="cams"></div>
-</div>
+    <section class="card panel" id="panel">
+      <svg id="dial" viewBox="0 0 380 200"
+           tabindex="0" role="slider"
+           aria-label="Camera pan angle"
+           aria-valuemin="0" aria-valuemax="180" aria-valuenow="90" aria-valuetext="90 degrees, center">
+        <defs>
+          <radialGradient id="beamFade" gradientUnits="userSpaceOnUse" cx="190" cy="186" r="110">
+            <stop offset="0"   stop-opacity=".30"/>
+            <stop offset=".55" stop-opacity=".14"/>
+            <stop offset="1"   stop-opacity=".02"/>
+          </radialGradient>
+          <filter id="knobShadow" x="-60%" y="-60%" width="220%" height="220%">
+            <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000" flood-opacity=".22"/>
+          </filter>
+        </defs>
+
+        <path class="track" d="M 50 186 A 140 140 0 0 1 330 186"
+              fill="none" stroke-width="20" stroke-linecap="round"/>
+        <g id="ticks"></g>
+        <path id="beam" class="beam" fill="url(#beamFade)"/>
+        <line id="sight" class="sight" x1="190" y1="186" x2="190" y2="80"
+              stroke-width="1" stroke-opacity=".55"/>
+        <path id="arc" class="arc" fill="none" stroke-width="20" stroke-linecap="round" stroke-opacity=".9"/>
+        <g id="knobG" filter="url(#knobShadow)">
+          <circle id="knob" cx="190" cy="46" r="12.5"/>
+          <circle id="knobDot" cx="190" cy="46" r="3.75"/>
+        </g>
+        <g id="cam">
+          <rect class="lensBody" x="177" y="176" width="26" height="18" rx="6" stroke-width="1"/>
+          <circle class="glass" cx="190" cy="185" r="4.5" stroke-width="1.5"/>
+        </g>
+      </svg>
+
+      <div class="bar">
+        <div class="readout" id="readout">
+          <span class="deg mono" id="deg">90°</span>
+          <small class="cap" id="zone">center</small>
+        </div>
+        <div class="actions">
+          <button class="btn step" id="left" aria-label="Pan left 10 degrees" title="Left 10°"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 5.5L8 12l6.5 6.5"/></svg><span class="mono">10°</span></button>
+          <button class="btn icon" id="home" aria-label="Center the camera" title="Center"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="7.4"/><path d="M12 1.8v3.4M12 18.8v3.4M1.8 12h3.4M18.8 12h3.4"/><circle cx="12" cy="12" r="1.7" fill="currentColor" stroke="none"/></svg></button>
+          <button class="btn step" id="right" aria-label="Pan right 10 degrees" title="Right 10°"><span class="mono">10°</span><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.5 5.5L16 12l-6.5 6.5"/></svg></button>
+        </div>
+      </div>
+    </section>
+
+    <section class="card group">
+      <span class="cap">Audio</span>
+      <div class="audio">
+        <button class="btn icon" id="listen" aria-pressed="false" aria-label="Listen" title="Listen"><svg class="ico i-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11.5 4.5L6.8 8.8H3.2v6.4h3.6l4.7 4.3z"/><path d="M15.6 9a4.6 4.6 0 0 1 0 6M18.6 6.2a8.6 8.6 0 0 1 0 11.6"/></svg><svg class="ico i-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11.5 4.5L6.8 8.8H3.2v6.4h3.6l4.7 4.3z"/><path d="M16.2 9.6l5.2 4.8M21.4 9.6l-5.2 4.8"/></svg></button>
+        <button class="btn icon" id="talk" aria-label="Hold to talk" title="Hold to talk"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9.2" y="2.6" width="5.6" height="10.8" rx="2.8"/><path d="M5.6 11.2a6.4 6.4 0 0 0 12.8 0M12 17.6v3.8M9 21.4h6"/></svg></button>
+        <span class="cap" id="audioMsg"></span>
+      </div>
+      <div class="volume">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11.5 4.5L6.8 8.8H3.2v6.4h3.6l4.7 4.3z"/><path d="M15.6 9a4.6 4.6 0 0 1 0 6"/></svg>
+        <input type="range" id="vol" min="0" max="100" value="80" aria-label="Volume" disabled>
+      </div>
+    </section>
+
+    <details class="card cams" id="cams" hidden>
+      <summary><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8.6h3.6L8.4 6h7.2l1.8 2.6H21v10.4H3z"/><circle cx="12" cy="13.4" r="3.3"/></svg><span class="cap">Camera</span>
+        <svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"
+             aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+      </summary>
+      <div class="rows" id="rows"></div>
+    </details>
+
+  </div>
+</main>
 
 <script>
-const CX = 180, CY = 195, R = 150, FOV = 65;
+// -- arranque ----------------------------------------------------------
+// Reusamos el mismo gato del loader del video en vez de repetir el markup.
+const boot = document.getElementById('boot');
+boot.prepend(document.querySelector('.nyan').cloneNode(true));
+setTimeout(() => {
+  boot.classList.add('done');
+  setTimeout(() => { boot.hidden = true; }, 600);
+}, 3000);
+
+// -- tema --------------------------------------------------------------
+// Tres estados: claro, oscuro y auto. Auto no escribe data-theme, así el
+// media query manda y sigue al sistema en vivo.
+const themeBox = document.querySelector('.theme');
+const glider = document.getElementById('glider');
+const themeColor = document.getElementById('themeColor');
+const PAPER = { light: '#f5f6f7', dark: '#0d1012' };
+
+function applyTheme(mode) {
+  if (mode === 'auto') document.documentElement.removeAttribute('data-theme');
+  else document.documentElement.setAttribute('data-theme', mode);
+  try { localStorage.setItem('catcam.theme', mode); } catch (e) { /* modo privado */ }
+
+  let active = null;
+  for (const b of themeBox.querySelectorAll('button')) {
+    const on = b.dataset.set === mode;
+    b.setAttribute('aria-pressed', String(on));
+    if (on) active = b;
+  }
+  if (active) {
+    glider.style.width = active.offsetWidth + 'px';
+    glider.style.transform = 'translateX(' + active.offsetLeft + 'px)';
+  }
+  const dark = mode === 'dark' ||
+    (mode === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
+  themeColor.content = dark ? PAPER.dark : PAPER.light;
+}
+
+let theme = 'auto';
+try { theme = localStorage.getItem('catcam.theme') || 'auto'; } catch (e) { /* modo privado */ }
+themeBox.addEventListener('click', ev => {
+  const b = ev.target.closest('button');
+  if (b) applyTheme(theme = b.dataset.set);
+});
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+  if (theme === 'auto') applyTheme('auto');
+});
+addEventListener('resize', () => applyTheme(theme));
+applyTheme(theme);
+// El glider mide botones que todavía no tienen la tipografía cargada.
+if (document.fonts) document.fonts.ready.then(() => applyTheme(theme));
+
+// -- dial --------------------------------------------------------------
+const CX = 190, CY = 186, R = 140, FOV = 65, BEAM_R = 110;
 const dial = document.getElementById('dial');
-const fov = document.getElementById('fov');
-const axis = document.getElementById('axis');
+const panel = document.getElementById('panel');
+const beam = document.getElementById('beam');
+const sight = document.getElementById('sight');
+const arc = document.getElementById('arc');
 const knob = document.getElementById('knob');
 const knobDot = document.getElementById('knobDot');
 const cam = document.getElementById('cam');
 const readout = document.getElementById('readout');
+const deg = document.getElementById('deg');
 const zone = document.getElementById('zone');
 
 let angle = 90, sent = 90, inFlight = false;
@@ -138,49 +566,62 @@ const ticks = document.getElementById('ticks');
 let marks = '';
 for (let a = 0; a <= 180; a += 15) {
   const major = a % 45 === 0;
-  const [x1, y1] = pt(a, major ? 168 : 172);
-  const [x2, y2] = pt(a, 182);
-  marks += `<line class="tick${major ? ' major' : ''}" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>`;
+  const [x1, y1] = pt(a, major ? 116 : 120);
+  const [x2, y2] = pt(a, 128);
+  marks += `<line class="tick${major ? ' major' : ''}" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke-width="${major ? 1.5 : 1}" stroke-linecap="round"/>`;
   if (major) {
-    const [lx, ly] = pt(a, 152);
-    marks += `<text class="lbl" x="${lx}" y="${ly}" text-anchor="middle" dominant-baseline="middle">${a}</text>`;
+    const [lx, ly] = pt(a, 166);
+    marks += `<text class="lbl mono" x="${lx}" y="${ly}" text-anchor="middle" dominant-baseline="middle">${a}</text>`;
   }
 }
 ticks.innerHTML = marks;
 
 function zoneName(a) {
-  if (a < 30) return 'extremo izquierdo';
-  if (a < 75) return 'izquierda';
-  if (a <= 105) return 'centro';
-  if (a <= 150) return 'derecha';
-  return 'extremo derecho';
+  if (a < 30) return 'far left';
+  if (a < 75) return 'left';
+  if (a <= 105) return 'center';
+  if (a <= 150) return 'right';
+  return 'far right';
 }
 
 function render() {
   const a = Math.round(angle);
-  const [ax, ay] = pt(a, R - 22);
-  axis.setAttribute('x2', ax); axis.setAttribute('y2', ay);
 
-  const [sx, sy] = pt(a - FOV / 2, R - 8);
-  const [ex, ey] = pt(a + FOV / 2, R - 8);
-  fov.setAttribute('d', `M ${CX} ${CY} L ${sx} ${sy} A ${R - 8} ${R - 8} 0 0 1 ${ex} ${ey} Z`);
+  const [sx2, sy2] = pt(a, BEAM_R - 4);
+  sight.setAttribute('x2', sx2); sight.setAttribute('y2', sy2);
 
-  const [kx, ky] = pt(a, R + 20);
+  const [bx, by] = pt(a - FOV / 2, BEAM_R);
+  const [ex, ey] = pt(a + FOV / 2, BEAM_R);
+  beam.setAttribute('d', `M ${CX} ${CY} L ${bx} ${by} A ${BEAM_R} ${BEAM_R} 0 0 1 ${ex} ${ey} Z`);
+
+  // El arco mide la desviación desde el centro, no el ángulo absoluto: de un
+  // vistazo se ve cuánto y para qué lado está girada la cámara.
+  const [zx, zy] = pt(90, R);
+  const [px, py] = pt(a, R);
+  arc.setAttribute('d', Math.abs(a - 90) < 1 ? ''
+    : `M ${zx} ${zy} A ${R} ${R} 0 0 ${a > 90 ? 1 : 0} ${px} ${py}`);
+
+  const [kx, ky] = pt(a, R);
   knob.setAttribute('cx', kx); knob.setAttribute('cy', ky);
   knobDot.setAttribute('cx', kx); knobDot.setAttribute('cy', ky);
 
   cam.setAttribute('transform', `rotate(${a - 90} ${CX} ${CY})`);
 
-  readout.firstChild.textContent = a + '°';
+  deg.textContent = a + '°';
   zone.textContent = zoneName(a);
   dial.setAttribute('aria-valuenow', a);
-  dial.setAttribute('aria-valuetext', `${a} grados, ${zoneName(a)}`);
+  dial.setAttribute('aria-valuetext', `${a} degrees, ${zoneName(a)}`);
 }
 
 function setAngle(next) {
   angle = Math.max(0, Math.min(180, next));
   render();
   pump();
+}
+
+function markStale(on) {
+  readout.classList.toggle('stale', on);
+  panel.classList.toggle('stale', on);
 }
 
 async function pump() {
@@ -196,9 +637,9 @@ async function pump() {
     });
     if (!res.ok) throw new Error(res.status);
     sent = target;
-    readout.classList.remove('stale');
+    markStale(false);
   } catch (e) {
-    readout.classList.add('stale');
+    markStale(true);
   } finally {
     inFlight = false;
     if (Math.round(angle) !== sent) pump();
@@ -207,7 +648,7 @@ async function pump() {
 
 function angleFromEvent(ev) {
   const rect = dial.getBoundingClientRect();
-  const s = 360 / rect.width;
+  const s = 380 / rect.width;
   const x = (ev.clientX - rect.left) * s;
   const y = (ev.clientY - rect.top) * s;
   const dx = x - CX;
@@ -242,11 +683,19 @@ dial.addEventListener('keydown', ev => {
 const video = document.getElementById('video');
 const feed = document.getElementById('feed');
 const videoMsg = document.getElementById('videoMsg');
+const statusPill = document.getElementById('status');
+const statusText = document.getElementById('statusText');
 let backoff = 1000, retryAt = null;
+
+function setStatus(text, state) {
+  statusText.textContent = text;
+  statusPill.dataset.state = state;
+}
 
 function connect() {
   clearTimeout(retryAt);
-  videoMsg.textContent = 'conectando…';
+  videoMsg.textContent = 'connecting…';
+  setStatus('connecting', 'wait');
   feed.src = '/api/stream?t=' + Date.now();   // sin query se sirve de caché
 }
 
@@ -257,7 +706,8 @@ function dropFeed(msg) {
 }
 
 function reconnect() {
-  dropFeed('sin video, reintentando…');
+  dropFeed('no video, retrying…');
+  setStatus('no signal', 'warn');
   retryAt = setTimeout(connect, backoff);
   backoff = Math.min(backoff * 2, 15000);
 }
@@ -265,12 +715,13 @@ function reconnect() {
 feed.addEventListener('load', () => {
   backoff = 1000;
   video.classList.add('live');
+  setStatus('live', 'live');
 });
 feed.addEventListener('error', () => { if (feed.src) reconnect(); });
 
 // Una pestaña de fondo sigue chupando ~12 Mbit/s del Pi si no la cortamos.
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) { clearTimeout(retryAt); dropFeed('en pausa'); }
+  if (document.hidden) { clearTimeout(retryAt); dropFeed('paused'); setStatus('paused', 'idle'); }
   else connect();
 });
 
@@ -312,8 +763,10 @@ function playChunk(bytes) {
 
 function showListening(on) {
   listening = on;
-  listen.classList.toggle('on', on);
-  listen.textContent = on ? 'Silenciar' : 'Escuchar';
+  listen.classList.toggle('rx', on);
+  listen.setAttribute('aria-pressed', String(on));
+  listen.title = on ? 'Mute' : 'Listen';
+  listen.setAttribute('aria-label', on ? 'Mute' : 'Listen');
   vol.disabled = !on;
 }
 
@@ -337,7 +790,7 @@ function ensureSocket() {
     if (!gain) { gain = actx.createGain(); gain.connect(actx.destination); }
     gain.gain.value = vol.value / 100;
     nextAt = 0;
-    audioMsg.textContent = 'conectando…';
+    audioMsg.textContent = 'connecting…';
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     sock = new WebSocket(proto + '//' + location.host + '/api/audio');
     sock.binaryType = 'arraybuffer';
@@ -351,8 +804,8 @@ function ensureSocket() {
       }
       if (afmt && listening) playChunk(ev.data);
     };
-    sock.onerror = () => { resolve(false); closeSocket('sin audio'); };
-    sock.onclose = () => { resolve(false); closeSocket('sin audio'); };
+    sock.onerror = () => { resolve(false); closeSocket('no audio'); };
+    sock.onclose = () => { resolve(false); closeSocket('no audio'); };
   });
   return opening;
 }
@@ -360,7 +813,7 @@ function ensureSocket() {
 listen.onclick = async () => {
   if (listening) {
     showListening(false);
-    if (!talk.classList.contains('on')) closeSocket();
+    if (!talk.classList.contains('tx')) closeSocket();
     return;
   }
   if (await ensureSocket()) { nextAt = 0; showListening(true); }
@@ -387,7 +840,7 @@ async function openMic() {
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
     });
   } catch (e) {
-    audioMsg.textContent = 'sin permiso de micrófono';
+    audioMsg.textContent = 'microphone blocked';
     return false;
   }
   const url = URL.createObjectURL(new Blob([TAP_WORKLET], { type: 'application/javascript' }));
@@ -395,7 +848,7 @@ async function openMic() {
   URL.revokeObjectURL(url);
   tap = new AudioWorkletNode(actx, 'tap');
   tap.port.onmessage = ev => {
-    if (!talk.classList.contains('on') || !sock || sock.readyState !== 1) return;
+    if (!talk.classList.contains('tx') || !sock || sock.readyState !== 1) return;
     const f32 = ev.data, pcm = new Int16Array(f32.length);
     for (let i = 0; i < f32.length; i++) {
       const v = Math.max(-1, Math.min(1, f32[i]));
@@ -409,23 +862,23 @@ async function openMic() {
 
 async function startTalk(ev) {
   if (ev) ev.preventDefault();
-  if (!SECURE || talk.classList.contains('on')) return;
-  talk.classList.add('on');                       // feedback antes del await
+  if (!SECURE || talk.classList.contains('tx')) return;
+  talk.classList.add('tx');                       // feedback antes del await
   const ready = await ensureSocket() && await openMic();
   // Puede haber soltado el botón mientras pedíamos permiso.
-  if (!ready || !talk.classList.contains('on')) { talk.classList.remove('on'); return; }
+  if (!ready || !talk.classList.contains('tx')) { talk.classList.remove('tx'); return; }
   sock.send(JSON.stringify({ talk: true }));
 }
 
 function stopTalk() {
-  if (!talk.classList.contains('on')) return;
-  talk.classList.remove('on');
+  if (!talk.classList.contains('tx')) return;
+  talk.classList.remove('tx');
   if (sock && sock.readyState === 1) sock.send(JSON.stringify({ talk: false }));
 }
 
 if (!SECURE) {
   talk.disabled = true;
-  talk.title = 'El micrófono necesita https, o abrir la página en localhost';
+  talk.title = 'The microphone needs https, or open the page on localhost';
 }
 talk.addEventListener('pointerdown', startTalk);
 talk.addEventListener('pointerup', stopTalk);
@@ -436,7 +889,8 @@ addEventListener('blur', stopTalk);   // si se va el foco, soltamos el botón
 // -- controles de la cámara -------------------------------------------
 // Las filas se arman con lo que reporta /api/controls, así agregar un control
 // en el server no toca este archivo.
-const cams = document.getElementById('cams');
+const camsBox = document.getElementById('cams');
+const rows = document.getElementById('rows');
 
 const fmt = (c, v) => {
   const n = v / c.scale;
@@ -459,11 +913,11 @@ function addRow(c) {
   row.className = 'ctl';
   row.innerHTML =
     `<span class="name">${c.label}</span>` +
-    (c.has_auto ? '<label><input type="checkbox"> auto</label>' : '') +
+    '<output class="mono"></output>' +
     `<input type="range" min="${c.min}" max="${c.max}" step="${c.step}"
             aria-label="${c.label}">` +
-    '<output></output>';
-  cams.appendChild(row);
+    (c.has_auto ? '<label><input type="checkbox"> auto</label>' : '');
+  rows.appendChild(row);
 
   const auto = row.querySelector('input[type=checkbox]');
   const range = row.querySelector('input[type=range]');
@@ -491,7 +945,12 @@ function addRow(c) {
 
 fetch('/api/controls')
   .then(r => r.ok ? r.json() : Promise.reject())
-  .then(all => Object.values(all).forEach(addRow))
+  .then(all => {
+    const list = Object.values(all);
+    if (!list.length) return;
+    camsBox.hidden = false;
+    list.forEach(addRow);
+  })
   .catch(() => {});
 
 document.getElementById('left').onclick = () => setAngle(angle - 10);

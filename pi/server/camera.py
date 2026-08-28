@@ -33,12 +33,12 @@ RETRY_S = 2.0
 # 0-180°, contra los ±10° del recorte de sensor.
 ADJUSTABLE = {
     'focus': {'ctl': 'focus_absolute', 'min': 300, 'max': 650, 'step': 5,
-              'scale': 1, 'suffix': '', 'label': 'Foco',
+              'scale': 1, 'suffix': '', 'label': 'Focus',
               'auto': 'focus_automatic_continuous'},
     'zoom': {'ctl': 'zoom_absolute', 'min': 100, 'max': 400, 'step': 5,
              'scale': 100, 'suffix': '×', 'label': 'Zoom', 'auto': None},
     'tilt': {'ctl': 'tilt_absolute', 'min': -36000, 'max': 36000, 'step': 3600,
-             'scale': 3600, 'suffix': '°', 'label': 'Inclinación', 'auto': None},
+             'scale': 3600, 'suffix': '°', 'label': 'Tilt', 'auto': None},
 }
 
 CONTROLS = {
