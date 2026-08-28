@@ -16,7 +16,7 @@ DEVICE = ('/dev/v4l/by-id/'
           'usb-Anker_PowerConf_C200_Anker_PowerConf_C200_ACNV9P1F07509355-video-index0')
 SIZE = (1280, 720)
 DEVICE_FPS = 30   # el único intervalo que ofrece la C200
-FPS = 15          # se redondea al divisor de DEVICE_FPS más cercano
+FPS = 30          # se redondea al divisor de DEVICE_FPS más cercano
 RETRY_S = 2.0
 
 # La C200 trae autofoco y auto-exposición: al panear se ponen a buscar y se ve
