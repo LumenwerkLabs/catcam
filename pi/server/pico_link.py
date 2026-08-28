@@ -13,7 +13,7 @@ def find_port():
         matches = sorted(glob.glob(pattern))
         if matches:
             return matches[0]
-    # raise RuntimeError('no encuentro el Pico')
+    raise RuntimeError('no encuentro el Pico')
 
 
 class PicoLink:
