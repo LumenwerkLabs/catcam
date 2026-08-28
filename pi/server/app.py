@@ -38,9 +38,9 @@ class PanRequest(BaseModel):
     angle: int = Field(ge=0, le=180)
 
 
-class FocusRequest(BaseModel):
+class ControlRequest(BaseModel):
     auto: bool = False
-    value: Optional[int] = Field(default=500, ge=300, le=650)
+    value: Optional[int] = None
 
 
 @app.post('/api/pan')
