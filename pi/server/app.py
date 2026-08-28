@@ -18,7 +18,7 @@ camera = None
 async def lifespan(app):
     global link, camera
     link = PicoLink()
-    print('Pico en', link.port)
+    print('Pico en', link.address)
     # Sin cámara el pan sigue andando: no tiramos el server abajo.
     try:
         camera = Camera().start()
