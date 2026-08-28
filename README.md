@@ -18,6 +18,7 @@ browser  ──HTTP──▶  Pi (FastAPI)  ──USB serial──▶  Pico (Mic
 | `pi/server/camera.py` | MJPEG capture from the USB webcam: one thread, many subscribers    |
 | `pi/server/app.py`    | FastAPI app exposing the pan, home, stream and snapshot endpoints  |
 | `pi/server/audio.py`  | Microphone capture off the C200, one thread, many subscribers      |
+| `pi/catcam.service`   | systemd unit: right cwd, device groups, restarts on its own        |
 | `pi/server/bench.py`  | Measures where video and control latency is actually spent         |
 | `pi/static/index.html`| Single-page UI: draggable SVG dial with FOV cone and keyboard support |
 
@@ -40,8 +41,40 @@ cd pi/server
 uvicorn app:app --host 0.0.0.0 --port 8000
 ```
 
+To keep it running without a terminal, install the unit:
+
+```sh
+sudo cp pi/catcam.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now catcam
+journalctl -u catcam -f
+```
+
 Open `http://<pi-address>:8000/`. The server finds the Pico automatically by
 scanning `/dev/ttyACM*` and `/dev/cu.usbmodem*`.
+
+### Keeping it running
+
+`pi/catcam.service` runs the server under systemd, so it comes back after a
+reboot and restarts if it falls over. Edit `User`, `WorkingDirectory` and
+`ExecStart` if your paths differ, then:
+
+```sh
+sudo cp pi/catcam.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now catcam
+```
+
+```sh
+systemctl status catcam       # ¿está arriba?
+journalctl -u catcam -f       # el log en vivo, en lugar de la terminal
+sudo systemctl restart catcam # después de tocar el código
+```
+
+`WorkingDirectory` has to be `pi/server`: `STATIC_DIR` is `../static` and the
+imports are flat, so the cwd is part of the configuration. `SupplementaryGroups`
+and `PrivateDevices=no` are what keep `/dev/video*` and `/dev/snd` visible —
+without them the camera and the microphone silently fail to open.
 
 To test the serial link without the web server:
 

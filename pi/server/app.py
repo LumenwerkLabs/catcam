@@ -24,8 +24,13 @@ speaker = None
 @asynccontextmanager
 async def lifespan(app):
     global link, camera, mic, speaker
-    link = PicoLink()
-    print('Pico en', link.address)
+    # Sin Pico se pierde el pan, pero el video y el audio siguen: no tiramos
+    # todo el server abajo por un servo que no contesta.
+    try:
+        link = PicoLink()
+        print('Pico en', link.address)
+    except OSError as exc:
+        print('sin Pico:', exc)
     # Sin cámara el pan sigue andando: no tiramos el server abajo.
     try:
         camera = Camera().start()
@@ -43,7 +48,8 @@ async def lifespan(app):
         mic.stop()
     if camera:
         camera.stop()
-    link.close()
+    if link:
+        link.close()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -60,7 +66,7 @@ class ControlRequest(BaseModel):
 
 @app.post('/api/pan')
 def set_pan(req: PanRequest):
-    reply = link.pan(req.angle)
+    reply = _link().pan(req.angle)
     if not reply.startswith('OK'):
         raise HTTPException(502, 'el Pico respondió: {!r}'.format(reply))
     return {'angle': int(reply.split()[1])}
@@ -68,7 +74,7 @@ def set_pan(req: PanRequest):
 
 @app.post('/api/home')
 def go_home():
-    reply = link.home()
+    reply = _link().home()
     if not reply.startswith('OK'):
         raise HTTPException(502, 'el Pico respondió: {!r}'.format(reply))
     return {'angle': int(reply.split()[1])}
@@ -100,6 +106,12 @@ async def stream():
         media_type='multipart/x-mixed-replace; boundary=' + BOUNDARY,
         headers={'Cache-Control': 'no-store'},
     )
+
+
+def _link():
+    if link is None:
+        raise HTTPException(503, 'no hay Pico')
+    return link
 
 
 def _camera():

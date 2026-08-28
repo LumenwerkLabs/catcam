@@ -1,0 +1,34 @@
+[Unit]
+Description=catcam — pan camera server
+# pico_link resuelve catcam.local por mDNS apenas arranca, así que la red y
+# avahi tienen que estar arriba antes que nosotros.
+Wants=network-online.target
+After=network-online.target avahi-daemon.service
+
+[Service]
+User=poopin
+# Tiene que ser pi/server: STATIC_DIR es '../static' y los imports son planos
+# (from camera import ...), así que el cwd es parte de la config.
+WorkingDirectory=/home/poopin/catcam/pi/server
+# --no-access-log: un solo arrastre del dial son cientos de POST /api/pan, y
+# todo eso iría al journal.
+ExecStart=/home/poopin/catcam/.venv/bin/uvicorn app:app --host 0.0.0.0 --port 8000 --no-access-log
+
+# video para /dev/video*, audio para arecord y aplay.
+SupplementaryGroups=video audio
+# Sin esto systemd esconde /dev/video* y /dev/snd enteros.
+PrivateDevices=no
+
+# Los print() del server (cámara, micrófono, 'audio out:') van al journal en el
+# momento y no cuando se llena el buffer del pipe.
+Environment=PYTHONUNBUFFERED=1
+
+Restart=always
+RestartSec=3
+# Sin esto systemd se rinde tras unos reintentos seguidos y deja el servicio
+# caído hasta que alguien lo levante a mano. Para una cámara que tiene que
+# volver sola después de un corte, conviene que reintente para siempre.
+StartLimitIntervalSec=0
+
+[Install]
+WantedBy=multi-user.target
