@@ -45,6 +45,14 @@
     border: 1px solid var(--line); background: #24232b; color: inherit; cursor: pointer;
   }
   button:hover { border-color: #4a4954; }
+  .audio {
+    display: flex; align-items: center; gap: .75rem;
+    margin-top: .75rem; padding-top: .75rem; border-top: 1px solid var(--line);
+    font-size: .9rem; color: var(--dim);
+  }
+  .audio input[type=range] { flex: 1; accent-color: var(--accent); cursor: pointer; min-width: 0; }
+  .audio input[type=range]:disabled { opacity: .35; cursor: default; }
+  #listen.on { border-color: var(--accent); color: var(--accent); }
   #cams { margin-top: .75rem; padding-top: .5rem; border-top: 1px solid var(--line); }
   .ctl {
     display: flex; align-items: center; gap: .75rem;
@@ -92,6 +100,13 @@
       <button id="home">Centrar</button>
       <button id="right">10° →</button>
     </div>
+  </div>
+
+  <div class="audio">
+    <button id="listen">Escuchar</button>
+    <input type="range" id="vol" min="0" max="100" value="80"
+           aria-label="Volumen" disabled>
+    <span id="audioMsg"></span>
   </div>
 
   <div id="cams"></div>
@@ -257,6 +272,75 @@ document.addEventListener('visibilitychange', () => {
 
 video.onclick = () => { backoff = 1000; connect(); };
 connect();
+
+// -- audio ------------------------------------------------------------
+// El navegador no deja arrancar audio sin un gesto del usuario, así que esto
+// vive detrás del botón. Los chunks son PCM crudo: se agendan uno atrás del
+// otro con un colchón, porque un AudioBuffer suelto por chunk chasquea.
+const listen = document.getElementById('listen');
+const vol = document.getElementById('vol');
+const audioMsg = document.getElementById('audioMsg');
+const JITTER = 0.15;
+
+let actx = null, gain = null, sock = null, afmt = null, nextAt = 0;
+
+function playChunk(bytes) {
+  const pcm = new Int16Array(bytes);
+  const frames = pcm.length / afmt.channels;
+  const buf = actx.createBuffer(afmt.channels, frames, afmt.rate);
+  for (let c = 0; c < afmt.channels; c++) {
+    const out = buf.getChannelData(c);
+    for (let i = 0; i < frames; i++) out[i] = pcm[i * afmt.channels + c] / 32768;
+  }
+  const src = actx.createBufferSource();
+  src.buffer = buf;
+  src.connect(gain);
+  // Si nos quedamos sin colchón (red o pestaña de fondo), resincronizamos en
+  // vez de encadenar chunks que ya llegaron tarde.
+  if (nextAt < actx.currentTime + 0.02) nextAt = actx.currentTime + JITTER;
+  src.start(nextAt);
+  nextAt += buf.duration;
+}
+
+function stopAudio(msg) {
+  if (sock) { sock.onclose = null; sock.close(); sock = null; }
+  listen.classList.remove('on');
+  listen.textContent = 'Escuchar';
+  vol.disabled = true;
+  audioMsg.textContent = msg || '';
+}
+
+async function startAudio() {
+  actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+  await actx.resume();
+  if (!gain) {
+    gain = actx.createGain();
+    gain.connect(actx.destination);
+  }
+  gain.gain.value = vol.value / 100;
+  nextAt = 0;
+  audioMsg.textContent = 'conectando…';
+
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  sock = new WebSocket(proto + '//' + location.host + '/api/audio');
+  sock.binaryType = 'arraybuffer';
+  sock.onmessage = ev => {
+    if (typeof ev.data === 'string') {   // el header de formato viene primero
+      afmt = JSON.parse(ev.data);
+      audioMsg.textContent = afmt.rate / 1000 + ' kHz';
+      return;
+    }
+    if (afmt) playChunk(ev.data);
+  };
+  sock.onerror = () => stopAudio('sin audio');
+  sock.onclose = () => stopAudio('sin audio');
+  listen.classList.add('on');
+  listen.textContent = 'Silenciar';
+  vol.disabled = false;
+}
+
+listen.onclick = () => (sock ? stopAudio() : startAudio());
+vol.oninput = () => { if (gain) gain.gain.value = vol.value / 100; };
 
 // -- controles de la cámara -------------------------------------------
 // Las filas se arman con lo que reporta /api/controls, así agregar un control

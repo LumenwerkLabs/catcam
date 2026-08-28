@@ -2,11 +2,12 @@ import time
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from audio import Microphone
 from camera import ADJUSTABLE, Camera
 from pico_link import PicoLink
 
@@ -14,11 +15,12 @@ STATIC_DIR = '../static'
 BOUNDARY = 'frame'
 link = None
 camera = None
+mic = None
 
 
 @asynccontextmanager
 async def lifespan(app):
-    global link, camera
+    global link, camera, mic
     link = PicoLink()
     print('Pico en', link.address)
     # Sin cámara el pan sigue andando: no tiramos el server abajo.
@@ -26,7 +28,13 @@ async def lifespan(app):
         camera = Camera().start()
     except Exception as exc:
         print('sin cámara:', exc)
+    try:
+        mic = Microphone().start()
+    except Exception as exc:
+        print('sin micrófono:', exc)
     yield
+    if mic:
+        mic.stop()
     if camera:
         camera.stop()
     link.close()
@@ -115,9 +123,30 @@ def set_control(name: str, req: ControlRequest):
     return state if state.get('value') is not None else cam.control(name)
 
 
+@app.websocket('/api/audio')
+async def audio_socket(ws: WebSocket):
+    await ws.accept()
+    if mic is None:
+        await ws.close(code=1011, reason='no hay micrófono')
+        return
+    # El cliente no adivina el formato: se lo decimos antes del primer chunk.
+    await ws.send_json({'rate': mic.rate, 'channels': mic.channels,
+                        'format': 's16le'})
+    queue = mic.subscribe()
+    try:
+        while True:
+            await ws.send_bytes(await queue.get())
+    except WebSocketDisconnect:
+        pass
+    finally:
+        mic.unsubscribe(queue)
+
+
 @app.get('/api/stats')
 def get_stats():
-    return _camera().stats()
+    stats = _camera().stats()
+    stats['audio'] = mic.stats() if mic else None
+    return stats
 
 
 @app.get('/api/snapshot')

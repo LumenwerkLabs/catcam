@@ -65,7 +65,7 @@ while True:
     for sock, event in poller.poll(0):
         if sock is srv:
             try:
-                new, addr = srv.accept()
+                new, _ = srv.accept()
             except OSError:
                 continue
             if conn:                    # una sola sesión: el Pi es el único cliente
@@ -74,7 +74,6 @@ while True:
             new.setblocking(False)
             conn, buf = new, b''
             poller.register(conn, select.POLLIN)
-            print('conectado', addr)
         else:
             try:
                 data = conn.recv(256)
@@ -88,7 +87,6 @@ while True:
                 poller.unregister(conn)
                 conn.close()
                 conn, buf = None, b''
-                print('desconectado')
 
     pending = None
     bad = 0

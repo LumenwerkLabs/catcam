@@ -212,9 +212,8 @@ class Camera:
                 if self.controls.get(spec['auto']) != on:
                     self._dev.controls[spec['auto']].value = on
                     self.controls[spec['auto']] = on
-                if on:
-                    return
-            if value is not None:
+            # Con el automático puesto no tiene sentido escribir el valor.
+            if value is not None and not (spec['auto'] and auto):
                 value = max(spec['min'], min(spec['max'], int(value)))
                 if spec['step'] > 1:
                     # tilt_absolute avanza de a 3600: el driver rechaza

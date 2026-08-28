@@ -17,6 +17,7 @@ browser  ──HTTP──▶  Pi (FastAPI)  ──USB serial──▶  Pico (Mic
 | `pi/server/pico_link.py` | Serial link to the Pico: port discovery, thread-safe send/reply |
 | `pi/server/camera.py` | MJPEG capture from the USB webcam: one thread, many subscribers    |
 | `pi/server/app.py`    | FastAPI app exposing the pan, home, stream and snapshot endpoints  |
+| `pi/server/audio.py`  | Microphone capture off the C200, one thread, many subscribers      |
 | `pi/server/bench.py`  | Measures where video and control latency is actually spent         |
 | `pi/static/index.html`| Single-page UI: draggable SVG dial with FOV cone and keyboard support |
 
@@ -70,6 +71,7 @@ cuts PWM to the servo to stop the idle jitter.
 | `POST /api/home` | –                 | `{"angle": 90}`   |
 | `GET /api/stream` | –                | MJPEG (`multipart/x-mixed-replace`) |
 | `GET /api/snapshot` | –              | a single `image/jpeg` |
+| `WS /api/audio` | –                  | JSON format header, then raw s16le PCM chunks |
 | `GET /api/stats` | –                 | capture counters, frame age, subscriber count |
 | `GET /api/controls` | –              | state of every adjustable camera control |
 | `POST /api/controls/{name}` | `{"auto": true}` or `{"value": n}` | the control's new state |
@@ -88,8 +90,17 @@ constants.
 An Anker PowerConf C200 on USB, at 1280x720. The camera encodes MJPEG onboard,
 so frames are passed through to the browser without ever being decoded — the Pi
 spends almost no CPU on video. It only offers 30 fps, so `camera.py` drops
-frames in software to reach `FPS`; at ~130 KB a frame, 12 fps is about
-12 Mbit/s.
+whole frames to reach `FPS` — meaning the achievable rates are 30/N: 30, 15,
+10, 7.5. Asking for 12 silently gives you 10, so the effective rate is printed
+at startup.
+
+15 fps is the measured sweet spot, at ~170 KB a frame and ~22 Mbit/s. Going to
+30 needs ~40 Mbit/s, which is more than the wifi carries: video drops to 3 fps,
+camera controls go from 66 ms to 1.3 s, and the Pi→Pico link starts timing out,
+since the stream and the servo commands share one radio. Going below 15 doesn't
+help either — a camera control costs `max(frame gap, ~66 ms)`, because a UVC
+control write on a streaming device runs about 4x slower than on an idle one.
+Use `bench.py` after changing any of this.
 
 The device is opened once, by a single capture thread, because a V4L2 node
 can't be opened twice. Viewers subscribe to the latest frame and a slow one
@@ -113,7 +124,31 @@ steps and generally only bites once you're zoomed past 1×, since at 1× there's
 no margin left to crop into. `pan_absolute` exists too but isn't exposed — the
 servo already pans 0–180°.
 
+## Audio
+
+The C200's microphone shows up as an ALSA capture device. `audio.py` shells out
+to `arecord` for 16 kHz mono s16le and fans the chunks out over a WebSocket —
+about 256 kbit/s, roughly 1% of what the video costs, so it isn't compressed.
+The device is addressed by name (`plughw:CARD=C200,DEV=0`) because card numbers
+move between reboots.
+
+Run `python audio.py` for a level meter that proves the mic works without the
+web server in the way.
+
+Playback in the browser sits behind the **Escuchar** button — browsers refuse to
+start audio without a user gesture. Chunks are scheduled back to back against
+the `AudioContext` clock with a 150 ms cushion, and resync if that cushion runs
+out. Audio and video are separate streams with no sync between them, so they
+drift by ~100 ms.
+
+The camera has **no speaker** — `aplay -l` lists only HDMI and the Pi's 3.5 mm
+jack — so talkback needs its own output hardware, and browsers only grant
+microphone access over HTTPS.
+
 ## Not done yet
+
+Talkback (browser microphone → the Pi's 3.5 mm jack) isn't built; it needs
+HTTPS and a powered speaker.
 
 Tilt is unimplemented; only pan exists. The C200 does expose `tilt_absolute`
 over UVC (±10°, digital), which would give a limited tilt with no second servo.
