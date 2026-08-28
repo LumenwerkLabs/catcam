@@ -151,7 +151,8 @@ class Speaker:
             self._proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
                                           stderr=subprocess.PIPE,
                                           start_new_session=True)
-            self._thread = threading.Thread(target=self._drain, daemon=True)
+            self._thread = threading.Thread(target=self._drain,
+                                            args=(self._proc,), daemon=True)
             self._thread.start()
             self.error = None
 
@@ -161,18 +162,22 @@ class Speaker:
         except queuelib.Full:
             pass        # audio en vivo: lo que llegó tarde ya no sirve
 
-    def _drain(self):
+    def _drain(self, proc):
+        stdin = proc.stdin
         while not self._stop.is_set():
             try:
                 pcm = self._queue.get(timeout=0.2)
             except queuelib.Empty:
                 continue
             try:
-                self._proc.stdin.write(pcm)
-                self._proc.stdin.flush()
-            except OSError as exc:
-                self.error = exc
-                print('audio out:', exc)
+                stdin.write(pcm)
+                stdin.flush()
+            except (OSError, ValueError) as exc:
+                # ValueError: close() ya cerró el pipe abajo nuestro. Es el
+                # final normal de un push to talk, no hay nada que reportar.
+                if not self._stop.is_set():
+                    self.error = exc
+                    print('audio out:', exc)
                 return
 
     def close(self):
