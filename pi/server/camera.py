@@ -15,7 +15,8 @@ from linuxpy.video.device import Device, VideoCapture
 DEVICE = ('/dev/v4l/by-id/'
           'usb-Anker_PowerConf_C200_Anker_PowerConf_C200_ACNV9P1F07509355-video-index0')
 SIZE = (1280, 720)
-FPS = 12        # recortado por software, ver _capture
+DEVICE_FPS = 30   # el único intervalo que ofrece la C200
+FPS = 15          # se redondea al divisor de DEVICE_FPS más cercano
 RETRY_S = 2.0
 
 # La C200 trae autofoco y auto-exposición: al panear se ponen a buscar y se ve
@@ -59,6 +60,7 @@ class Camera:
         self._dev = None
         self._devlock = threading.Lock()
         self._frame_t = None
+        self.effective_fps = None
         self.captured = 0       # frames leídos del device
         self.published = 0      # los que sobrevivieron al recorte de fps
         self.sent_bytes = 0
@@ -107,19 +109,21 @@ class Camera:
                 self._dev = dev
             with cap:
                 self.error = None
-                interval = 1.0 / self.fps if self.fps else 0.0
-                last = 0.0
+                # Sólo podemos saltear frames enteros, así que las tasas
+                # posibles son DEVICE_FPS/N: 30, 15, 10, 7.5... Pedir 12 daba
+                # 10 sin avisar, de ahí que redondeemos y lo digamos.
+                every = max(1, round(DEVICE_FPS / self.fps)) if self.fps else 1
+                self.effective_fps = DEVICE_FPS / every
+                print('camera: {} fps efectivos (1 de cada {})'
+                      .format(self.effective_fps, every))
+                n = 0
                 for frame in cap:
                     if self._stop.is_set():
                         return
                     self.captured += 1
-                    # La C200 sólo entrega 30 fps: no hay otro intervalo que
-                    # negociar, así que recortamos acá. Cada frame son ~130 KB,
-                    # o sea ~31 Mbit/s sin recorte.
-                    now = time.monotonic()
-                    if now - last < interval:
+                    n += 1
+                    if n % every:
                         continue
-                    last = now
                     self._publish(bytes(frame))
         finally:
             with self._devlock:
@@ -189,12 +193,15 @@ class Camera:
         with self._devlock:
             if self._dev is None:
                 raise RuntimeError('la cámara no está abierta')
+            # Cada escritura tarda ~100 ms en el firmware de la C200, así
+            # que no reescribimos lo que ya está en ese valor.
             if spec['auto']:
                 # focus_absolute queda inactive mientras corre el AF: para
                 # escribirlo hay que apagarlo primero.
                 on = 1 if auto else 0
-                self._dev.controls[spec['auto']].value = on
-                self.controls[spec['auto']] = on
+                if self.controls.get(spec['auto']) != on:
+                    self._dev.controls[spec['auto']].value = on
+                    self.controls[spec['auto']] = on
                 if on:
                     return
             if value is not None:
@@ -203,8 +210,9 @@ class Camera:
                     # tilt_absolute avanza de a 3600: el driver rechaza
                     # cualquier valor fuera de la grilla.
                     value = round(value / spec['step']) * spec['step']
-                self._dev.controls[spec['ctl']].value = value
-                self.controls[spec['ctl']] = value
+                if self.controls.get(spec['ctl']) != value:
+                    self._dev.controls[spec['ctl']].value = value
+                    self.controls[spec['ctl']] = value
 
     # -- consumo ---------------------------------------------------------
 
