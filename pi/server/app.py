@@ -1,3 +1,4 @@
+import time
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -68,9 +69,13 @@ async def stream():
     async def parts():
         try:
             while True:
-                jpeg = await queue.get()
+                jpeg, stamped = await queue.get()
+                # Edad del frame al salir: si es chica, lo que se demora está
+                # río abajo (buffer del socket, red, browser).
+                age = int((time.monotonic() - stamped) * 1000)
                 yield (b'--' + BOUNDARY.encode() + b'\r\n'
                        b'Content-Type: image/jpeg\r\n'
+                       b'X-Frame-Age: ' + str(age).encode() + b'\r\n'
                        b'Content-Length: ' + str(len(jpeg)).encode() + b'\r\n\r\n'
                        + jpeg + b'\r\n')
         finally:
@@ -107,6 +112,11 @@ def set_control(name: str, req: ControlRequest):
     except (OSError, RuntimeError, KeyError) as exc:
         raise HTTPException(502, 'la cámara rechazó el control: {}'.format(exc))
     return cam.control(name)
+
+
+@app.get('/api/stats')
+def get_stats():
+    return _camera().stats()
 
 
 @app.get('/api/snapshot')

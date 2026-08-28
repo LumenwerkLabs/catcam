@@ -17,6 +17,7 @@ browser  ──HTTP──▶  Pi (FastAPI)  ──USB serial──▶  Pico (Mic
 | `pi/server/pico_link.py` | Serial link to the Pico: port discovery, thread-safe send/reply |
 | `pi/server/camera.py` | MJPEG capture from the USB webcam: one thread, many subscribers    |
 | `pi/server/app.py`    | FastAPI app exposing the pan, home, stream and snapshot endpoints  |
+| `pi/server/bench.py`  | Measures where video and control latency is actually spent         |
 | `pi/static/index.html`| Single-page UI: draggable SVG dial with FOV cone and keyboard support |
 
 ## Wiring
@@ -69,6 +70,7 @@ cuts PWM to the servo to stop the idle jitter.
 | `POST /api/home` | –                 | `{"angle": 90}`   |
 | `GET /api/stream` | –                | MJPEG (`multipart/x-mixed-replace`) |
 | `GET /api/snapshot` | –              | a single `image/jpeg` |
+| `GET /api/stats` | –                 | capture counters, frame age, subscriber count |
 | `GET /api/controls` | –              | state of every adjustable camera control |
 | `POST /api/controls/{name}` | `{"auto": true}` or `{"value": n}` | the control's new state |
 

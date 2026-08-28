@@ -58,6 +58,10 @@ class Camera:
         self._subs = []
         self._dev = None
         self._devlock = threading.Lock()
+        self._frame_t = None
+        self.captured = 0       # frames leídos del device
+        self.published = 0      # los que sobrevivieron al recorte de fps
+        self.sent_bytes = 0
 
     def start(self):
         if self._thread is None:
@@ -108,6 +112,7 @@ class Camera:
                 for frame in cap:
                     if self._stop.is_set():
                         return
+                    self.captured += 1
                     # La C200 sólo entrega 30 fps: no hay otro intervalo que
                     # negociar, así que recortamos acá. Cada frame son ~130 KB,
                     # o sea ~31 Mbit/s sin recorte.
@@ -122,13 +127,17 @@ class Camera:
             dev.close()
 
     def _publish(self, jpeg):
+        stamped = (jpeg, time.monotonic())
         with self._cond:
             self._frame = jpeg
+            self._frame_t = stamped[1]
             self._seq += 1
+            self.published += 1
+            self.sent_bytes += len(jpeg)
             self._cond.notify_all()
             subs = list(self._subs)
         for loop, queue in subs:
-            loop.call_soon_threadsafe(self._offer, queue, jpeg)
+            loop.call_soon_threadsafe(self._offer, queue, stamped)
 
     # -- suscripción asyncio (para el endpoint de streaming) --------------
 
@@ -144,14 +153,14 @@ class Camera:
             self._subs = [s for s in self._subs if s[1] is not queue]
 
     @staticmethod
-    def _offer(queue, jpeg):
+    def _offer(queue, stamped):
         if queue.full():
             try:
                 queue.get_nowait()      # tiramos el viejo, mandamos el nuevo
             except asyncio.QueueEmpty:
                 pass
         try:
-            queue.put_nowait(jpeg)
+            queue.put_nowait(stamped)
         except asyncio.QueueFull:
             pass
 
@@ -202,6 +211,23 @@ class Camera:
     def snapshot(self):
         with self._cond:
             return self._frame
+
+    def stats(self):
+        """Contadores crudos. Dos lecturas y una resta dan las tasas."""
+        with self._cond:
+            age = None if self._frame_t is None else self._frame_t
+            subs = len(self._subs)
+        now = time.monotonic()
+        return {
+            'captured': self.captured,
+            'published': self.published,
+            'dropped': self.captured - self.published,
+            'sent_bytes': self.sent_bytes,
+            'subscribers': subs,
+            'frame_age_ms': None if age is None else round((now - age) * 1000, 1),
+            'clock': round(now, 3),
+            'error': None if self.error is None else str(self.error),
+        }
 
     def frames(self, timeout=5.0):
         """Generador del último frame. El cliente lento saltea, no acumula."""
