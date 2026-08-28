@@ -69,6 +69,8 @@ cuts PWM to the servo to stop the idle jitter.
 | `POST /api/home` | –                 | `{"angle": 90}`   |
 | `GET /api/stream` | –                | MJPEG (`multipart/x-mixed-replace`) |
 | `GET /api/snapshot` | –              | a single `image/jpeg` |
+| `GET /api/focus` | –                 | `{"auto": false, "value": 300, "min": 300, "max": 650}` |
+| `POST /api/focus` | `{"auto": true}` or `{"value": 300-650}` | the new focus state |
 
 A `502` means the Pico answered with something other than `OK`.
 
@@ -95,7 +97,10 @@ Your user must be in the `video` group (`sudo usermod -aG video $USER`, then log
 out and back in). Under systemd, also set `SupplementaryGroups=video` and
 `PrivateDevices=no` — the latter hides `/dev/video*` outright.
 
-Autofocus is pinned off in `CONTROLS`, since it hunts on every pan. Set
+Autofocus is pinned off in `CONTROLS`, since it hunts on every pan, but the UI
+can drive it live over `/api/focus` — a manual slider over `focus_absolute`
+(300–650) plus an auto toggle. Whatever you pick is written back into
+`CONTROLS`, so it survives the camera being unplugged and reconnecting. Set
 `power_line_frequency` to `2` if you're on 60 Hz mains.
 
 ## Not done yet

@@ -45,6 +45,15 @@
     border: 1px solid var(--line); background: #24232b; color: inherit; cursor: pointer;
   }
   button:hover { border-color: #4a4954; }
+  .focus {
+    display: flex; align-items: center; gap: .75rem;
+    margin-top: .75rem; padding-top: .75rem; border-top: 1px solid var(--line);
+    font-size: .9rem; color: var(--dim);
+  }
+  .focus label { display: flex; align-items: center; gap: .4rem; cursor: pointer; white-space: nowrap; }
+  .focus input[type=range] { flex: 1; accent-color: var(--accent); cursor: pointer; }
+  .focus input[type=range]:disabled { opacity: .35; cursor: default; }
+  .focus output { font-variant-numeric: tabular-nums; color: var(--fg); min-width: 3ch; text-align: right; }
   .tick { stroke: var(--line); }
   .tick.major { stroke: #55535e; }
   .lbl { fill: var(--dim); font-size: 11px; font-variant-numeric: tabular-nums; }
@@ -82,6 +91,13 @@
       <button id="home">Centrar</button>
       <button id="right">10° →</button>
     </div>
+  </div>
+
+  <div class="focus">
+    <label><input type="checkbox" id="af"> Autofoco</label>
+    <input type="range" id="focus" min="300" max="650" step="5"
+           aria-label="Foco manual" disabled>
+    <output id="focusVal">–</output>
   </div>
 </div>
 
@@ -245,6 +261,44 @@ document.addEventListener('visibilitychange', () => {
 
 video.onclick = () => { backoff = 1000; connect(); };
 connect();
+
+// -- foco -------------------------------------------------------------
+// focus_absolute queda inactive mientras corre el autofoco, así que el server
+// lo apaga solo cuando mandamos un valor.
+const af = document.getElementById('af');
+const focus = document.getElementById('focus');
+const focusVal = document.getElementById('focusVal');
+let focusTimer = null;
+
+function showFocus(state) {
+  af.checked = state.auto;
+  focus.disabled = state.auto;
+  focus.value = state.value;
+  focusVal.textContent = state.auto ? 'auto' : state.value;
+}
+
+async function postFocus(body) {
+  try {
+    const res = await fetch('/api/focus', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    if (res.ok) showFocus(await res.json());
+  } catch (e) { /* la cámara puede no estar; el próximo intento reintenta */ }
+}
+
+focus.addEventListener('input', () => {
+  focusVal.textContent = focus.value;
+  clearTimeout(focusTimer);   // arrastrar el slider si no dispara un POST por píxel
+  focusTimer = setTimeout(() => postFocus({ value: +focus.value }), 120);
+});
+af.addEventListener('change', () => {
+  focus.disabled = af.checked;
+  postFocus(af.checked ? { auto: true } : { value: +focus.value });
+});
+
+fetch('/api/focus').then(r => r.ok && r.json().then(showFocus)).catch(() => {});
 
 document.getElementById('left').onclick = () => setAngle(angle - 10);
 document.getElementById('right').onclick = () => setAngle(angle + 10);

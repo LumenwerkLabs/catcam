@@ -21,6 +21,8 @@ RETRY_S = 2.0
 # La C200 trae autofoco y auto-exposición: al panear se ponen a buscar y se ve
 # el pumping. focus_absolute va de 300 a 650; probá los dos extremos y quedate
 # con el que enfoque a distancia de habitación.
+FOCUS_MIN, FOCUS_MAX = 300, 650
+
 CONTROLS = {
     'power_line_frequency': 1,          # 1 = 50 Hz, 2 = 60 Hz
     'focus_automatic_continuous': 0,
@@ -41,6 +43,8 @@ class Camera:
         self._stop = threading.Event()
         self._thread = None
         self._subs = []
+        self._dev = None
+        self._devlock = threading.Lock()
 
     def start(self):
         if self._thread is None:
@@ -82,6 +86,8 @@ class Camera:
             cap = VideoCapture(dev)
             cap.set_format(self.size[0], self.size[1], 'MJPG')
             cap.set_fps(self.fps)
+            with self._devlock:
+                self._dev = dev
             with cap:
                 self.error = None
                 interval = 1.0 / self.fps if self.fps else 0.0
@@ -98,6 +104,8 @@ class Camera:
                     last = now
                     self._publish(bytes(frame))
         finally:
+            with self._devlock:
+                self._dev = None
             dev.close()
 
     def _publish(self, jpeg):
@@ -133,6 +141,36 @@ class Camera:
             queue.put_nowait(jpeg)
         except asyncio.QueueFull:
             pass
+
+    # -- foco -------------------------------------------------------------
+
+    def focus(self):
+        """Estado actual, o None si la cámara no está abierta."""
+        with self._devlock:
+            if self._dev is None:
+                return None
+            auto = self._dev.controls['focus_automatic_continuous'].value
+            value = self._dev.controls['focus_absolute'].value
+        return {'auto': bool(auto), 'value': value,
+                'min': FOCUS_MIN, 'max': FOCUS_MAX}
+
+    def set_focus(self, value=None, auto=None):
+        """focus_absolute está inactive mientras el AF corre: hay que apagarlo
+        primero. Guardamos lo elegido en self.controls para que sobreviva a una
+        reconexión de la cámara."""
+        with self._devlock:
+            if self._dev is None:
+                raise RuntimeError('la cámara no está abierta')
+            if auto:
+                self._dev.controls['focus_automatic_continuous'].value = 1
+                self.controls['focus_automatic_continuous'] = 1
+            else:
+                self._dev.controls['focus_automatic_continuous'].value = 0
+                self.controls['focus_automatic_continuous'] = 0
+                if value is not None:
+                    value = max(FOCUS_MIN, min(FOCUS_MAX, int(value)))
+                    self._dev.controls['focus_absolute'].value = value
+                    self.controls['focus_absolute'] = value
 
     # -- consumo ---------------------------------------------------------
 

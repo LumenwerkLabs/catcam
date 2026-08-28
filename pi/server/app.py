@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from typing import Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, Response, StreamingResponse
@@ -35,6 +36,11 @@ app = FastAPI(lifespan=lifespan)
 
 class PanRequest(BaseModel):
     angle: int = Field(ge=0, le=180)
+
+
+class FocusRequest(BaseModel):
+    auto: bool = False
+    value: Optional[int] = Field(default=None, ge=300, le=650)
 
 
 @app.post('/api/pan')
@@ -75,6 +81,30 @@ async def stream():
         media_type='multipart/x-mixed-replace; boundary=' + BOUNDARY,
         headers={'Cache-Control': 'no-store'},
     )
+
+
+def _camera():
+    if camera is None:
+        raise HTTPException(503, 'no hay cámara')
+    return camera
+
+
+@app.get('/api/focus')
+def get_focus():
+    state = _camera().focus()
+    if state is None:
+        raise HTTPException(503, 'la cámara no está abierta')
+    return state
+
+
+@app.post('/api/focus')
+def set_focus(req: FocusRequest):
+    cam = _camera()
+    try:
+        cam.set_focus(value=req.value, auto=req.auto)
+    except (OSError, RuntimeError, KeyError) as exc:
+        raise HTTPException(502, 'la cámara rechazó el control: {}'.format(exc))
+    return cam.focus()
 
 
 @app.get('/api/snapshot')
