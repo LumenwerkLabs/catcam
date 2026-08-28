@@ -107,7 +107,7 @@
 
   <div class="audio">
     <button id="listen">Escuchar</button>
-    <button id="talk" disabled>Hablar</button>
+    <button id="talk">Hablar</button>
     <input type="range" id="vol" min="0" max="100" value="80"
            aria-label="Volumen" disabled>
     <span id="audioMsg"></span>
@@ -278,15 +278,19 @@ video.onclick = () => { backoff = 1000; connect(); };
 connect();
 
 // -- audio ------------------------------------------------------------
-// El navegador no deja arrancar audio sin un gesto del usuario, así que esto
-// vive detrás del botón. Los chunks son PCM crudo: se agendan uno atrás del
-// otro con un colchón, porque un AudioBuffer suelto por chunk chasquea.
+// Un solo socket para las dos direcciones. Escuchar decide si reproducimos lo
+// que baja; Hablar abre el socket por su cuenta si hace falta, así ninguno de
+// los dos botones depende del otro.
 const listen = document.getElementById('listen');
+const talk = document.getElementById('talk');
 const vol = document.getElementById('vol');
 const audioMsg = document.getElementById('audioMsg');
 const JITTER = 0.15;
+// getUserMedia no existe fuera de contexto seguro: sin https no hay micrófono.
+const SECURE = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
 
 let actx = null, gain = null, sock = null, afmt = null, nextAt = 0;
+let listening = false, opening = null, micStream = null, tap = null;
 
 function playChunk(bytes) {
   const pcm = new Int16Array(bytes);
@@ -299,61 +303,72 @@ function playChunk(bytes) {
   const src = actx.createBufferSource();
   src.buffer = buf;
   src.connect(gain);
-  // Si nos quedamos sin colchón (red o pestaña de fondo), resincronizamos en
-  // vez de encadenar chunks que ya llegaron tarde.
+  // Si nos quedamos sin colchón (red o pestaña de fondo) resincronizamos en vez
+  // de encadenar chunks que ya llegaron tarde.
   if (nextAt < actx.currentTime + 0.02) nextAt = actx.currentTime + JITTER;
   src.start(nextAt);
   nextAt += buf.duration;
 }
 
-function stopAudio(msg) {
-  if (sock) { sock.onclose = null; sock.close(); sock = null; }
-  listen.classList.remove('on');
-  listen.textContent = 'Escuchar';
-  vol.disabled = true;
-  talk.classList.remove('on');
-  talk.disabled = true;
+function showListening(on) {
+  listening = on;
+  listen.classList.toggle('on', on);
+  listen.textContent = on ? 'Silenciar' : 'Escuchar';
+  vol.disabled = !on;
+}
+
+function closeSocket(msg) {
+  if (sock) { sock.onclose = null; sock.onerror = null; sock.close(); sock = null; }
+  afmt = null;
+  opening = null;
+  stopTalk();
+  showListening(false);
   audioMsg.textContent = msg || '';
 }
 
-async function startAudio() {
-  actx = actx || new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-  await actx.resume();
-  if (!gain) {
-    gain = actx.createGain();
-    gain.connect(actx.destination);
-  }
-  gain.gain.value = vol.value / 100;
-  nextAt = 0;
-  audioMsg.textContent = 'conectando…';
-
-  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  sock = new WebSocket(proto + '//' + location.host + '/api/audio');
-  sock.binaryType = 'arraybuffer';
-  sock.onmessage = ev => {
-    if (typeof ev.data === 'string') {   // el header de formato viene primero
-      afmt = JSON.parse(ev.data);
-      audioMsg.textContent = afmt.rate / 1000 + ' kHz';
-      return;
-    }
-    if (afmt) playChunk(ev.data);
-  };
-  sock.onerror = () => stopAudio('sin audio');
-  sock.onclose = () => stopAudio('sin audio');
-  listen.classList.add('on');
-  listen.textContent = 'Silenciar';
-  vol.disabled = false;
-  talk.disabled = false;
+function ensureSocket() {
+  if (sock && sock.readyState === 1 && afmt) return Promise.resolve(true);
+  if (opening) return opening;
+  opening = new Promise(resolve => {
+    // 16 kHz en el contexto: lo que capture el worklet ya sale en el formato
+    // del server y no hay que remuestrear en JS.
+    actx = actx || new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+    actx.resume();
+    if (!gain) { gain = actx.createGain(); gain.connect(actx.destination); }
+    gain.gain.value = vol.value / 100;
+    nextAt = 0;
+    audioMsg.textContent = 'conectando…';
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    sock = new WebSocket(proto + '//' + location.host + '/api/audio');
+    sock.binaryType = 'arraybuffer';
+    sock.onmessage = ev => {
+      if (typeof ev.data === 'string') {     // el header de formato viene primero
+        afmt = JSON.parse(ev.data);
+        audioMsg.textContent = afmt.rate / 1000 + ' kHz';
+        opening = null;
+        resolve(true);
+        return;
+      }
+      if (afmt && listening) playChunk(ev.data);
+    };
+    sock.onerror = () => { resolve(false); closeSocket('sin audio'); };
+    sock.onclose = () => { resolve(false); closeSocket('sin audio'); };
+  });
+  return opening;
 }
 
-listen.onclick = () => (sock ? stopAudio() : startAudio());
+listen.onclick = async () => {
+  if (listening) {
+    showListening(false);
+    if (!talk.classList.contains('on')) closeSocket();
+    return;
+  }
+  if (await ensureSocket()) { nextAt = 0; showListening(true); }
+};
+
+vol.oninput = () => { if (gain) gain.gain.value = vol.value / 100; };
 
 // -- hablar (push to talk) --------------------------------------------
-// getUserMedia sólo existe en contexto seguro: por http:// desde otra máquina
-// no hay micrófono ni aviso, hace falta HTTPS (o abrirlo en localhost).
-const talk = document.getElementById('talk');
-let micStream = null, tap = null;
-
 const TAP_WORKLET = `
 class Tap extends AudioWorkletProcessor {
   process(inputs) {
@@ -367,10 +382,6 @@ registerProcessor('tap', Tap);
 
 async function openMic() {
   if (tap) return true;
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    audioMsg.textContent = 'hace falta https';
-    return false;
-  }
   try {
     micStream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
@@ -398,9 +409,11 @@ async function openMic() {
 
 async function startTalk(ev) {
   if (ev) ev.preventDefault();
-  if (!sock || sock.readyState !== 1 || talk.classList.contains('on')) return;
-  if (!await openMic()) return;
-  talk.classList.add('on');
+  if (!SECURE || talk.classList.contains('on')) return;
+  talk.classList.add('on');                       // feedback antes del await
+  const ready = await ensureSocket() && await openMic();
+  // Puede haber soltado el botón mientras pedíamos permiso.
+  if (!ready || !talk.classList.contains('on')) { talk.classList.remove('on'); return; }
   sock.send(JSON.stringify({ talk: true }));
 }
 
@@ -410,12 +423,15 @@ function stopTalk() {
   if (sock && sock.readyState === 1) sock.send(JSON.stringify({ talk: false }));
 }
 
+if (!SECURE) {
+  talk.disabled = true;
+  talk.title = 'El micrófono necesita https, o abrir la página en localhost';
+}
 talk.addEventListener('pointerdown', startTalk);
 talk.addEventListener('pointerup', stopTalk);
 talk.addEventListener('pointercancel', stopTalk);
 talk.addEventListener('pointerleave', stopTalk);
 addEventListener('blur', stopTalk);   // si se va el foco, soltamos el botón
-vol.oninput = () => { if (gain) gain.gain.value = vol.value / 100; };
 
 // -- controles de la cámara -------------------------------------------
 // Las filas se arman con lo que reporta /api/controls, así agregar un control
