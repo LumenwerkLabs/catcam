@@ -26,7 +26,7 @@ FOCUS_MIN, FOCUS_MAX = 300, 650
 CONTROLS = {
     'power_line_frequency': 1,          # 1 = 50 Hz, 2 = 60 Hz
     'focus_automatic_continuous': 0,
-    'focus_absolute': 300,
+    'focus_absolute': 500,
 }
 
 

@@ -40,7 +40,7 @@ class PanRequest(BaseModel):
 
 class FocusRequest(BaseModel):
     auto: bool = False
-    value: Optional[int] = Field(default=None, ge=300, le=650)
+    value: Optional[int] = Field(default=500, ge=300, le=650)
 
 
 @app.post('/api/pan')
