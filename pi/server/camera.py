@@ -170,18 +170,26 @@ class Camera:
 
     # -- controles de la cámara -------------------------------------------
 
+    def _describe(self, name, value, auto):
+        spec = ADJUSTABLE[name]
+        state = {k: spec[k] for k in ('min', 'max', 'step', 'scale', 'suffix', 'label')}
+        state.update(name=name, value=value, auto=auto,
+                     has_auto=spec['auto'] is not None)
+        return state
+
     def control(self, name):
-        """Estado de un control, o None si la cámara no está abierta."""
+        """Lee del device. Cada ioctl cuesta ~50 ms mientras hay stream, así
+        que esto es para el estado inicial, no para cada ajuste."""
         spec = ADJUSTABLE[name]
         with self._devlock:
             if self._dev is None:
                 return None
             value = self._dev.controls[spec['ctl']].value
             auto = bool(self._dev.controls[spec['auto']].value) if spec['auto'] else False
-        state = {k: spec[k] for k in ('min', 'max', 'step', 'scale', 'suffix', 'label')}
-        state.update(name=name, value=value, auto=auto,
-                     has_auto=spec['auto'] is not None)
-        return state
+        self.controls[spec['ctl']] = value
+        if spec['auto']:
+            self.controls[spec['auto']] = int(auto)
+        return self._describe(name, value, auto)
 
     def controls_state(self):
         return {n: self.control(n) for n in ADJUSTABLE}
@@ -213,6 +221,9 @@ class Camera:
                 if self.controls.get(spec['ctl']) != value:
                     self._dev.controls[spec['ctl']].value = value
                     self.controls[spec['ctl']] = value
+        # Devolvemos lo que acabamos de escribir: releerlo duplicaría los ioctl.
+        return self._describe(name, self.controls.get(spec['ctl']),
+                              bool(self.controls.get(spec['auto'])) if spec['auto'] else False)
 
     # -- consumo ---------------------------------------------------------
 

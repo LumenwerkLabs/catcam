@@ -108,10 +108,11 @@ def set_control(name: str, req: ControlRequest):
         raise HTTPException(404, 'no existe el control {!r}'.format(name))
     cam = _camera()
     try:
-        cam.set_control(name, value=req.value, auto=req.auto)
+        state = cam.set_control(name, value=req.value, auto=req.auto)
     except (OSError, RuntimeError, KeyError) as exc:
         raise HTTPException(502, 'la cámara rechazó el control: {}'.format(exc))
-    return cam.control(name)
+    # set_control ya devuelve el estado; releerlo cuesta otro ioctl de ~50 ms.
+    return state if state.get('value') is not None else cam.control(name)
 
 
 @app.get('/api/stats')
