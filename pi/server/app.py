@@ -1,22 +1,32 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from camera import Camera
 from pico_link import PicoLink
 
 STATIC_DIR = '../static'
+BOUNDARY = 'frame'
 link = None
+camera = None
 
 
 @asynccontextmanager
 async def lifespan(app):
-    global link
+    global link, camera
     link = PicoLink()
     print('Pico en', link.port)
+    # Sin cámara el pan sigue andando: no tiramos el server abajo.
+    try:
+        camera = Camera().start()
+    except Exception as exc:
+        print('sin cámara:', exc)
     yield
+    if camera:
+        camera.stop()
     link.close()
 
 
@@ -41,6 +51,39 @@ def go_home():
     if not reply.startswith('OK'):
         raise HTTPException(502, 'el Pico respondió: {!r}'.format(reply))
     return {'angle': int(reply.split()[1])}
+
+
+@app.get('/api/stream')
+async def stream():
+    if camera is None:
+        raise HTTPException(503, 'no hay cámara')
+    queue = camera.subscribe()
+
+    async def parts():
+        try:
+            while True:
+                jpeg = await queue.get()
+                yield (b'--' + BOUNDARY.encode() + b'\r\n'
+                       b'Content-Type: image/jpeg\r\n'
+                       b'Content-Length: ' + str(len(jpeg)).encode() + b'\r\n\r\n'
+                       + jpeg + b'\r\n')
+        finally:
+            camera.unsubscribe(queue)
+
+    return StreamingResponse(
+        parts(),
+        media_type='multipart/x-mixed-replace; boundary=' + BOUNDARY,
+        headers={'Cache-Control': 'no-store'},
+    )
+
+
+@app.get('/api/snapshot')
+def snapshot():
+    jpeg = camera.snapshot() if camera else None
+    if jpeg is None:
+        raise HTTPException(503, 'todavía no hay imagen')
+    return Response(jpeg, media_type='image/jpeg',
+                    headers={'Cache-Control': 'no-store'})
 
 
 @app.get('/')

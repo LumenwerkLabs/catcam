@@ -5,6 +5,7 @@ Los clientes se suscriben al último frame: el que va lento saltea frames en vez
 de acumular backlog.
 """
 
+import asyncio
 import threading
 import time
 
@@ -14,7 +15,7 @@ from linuxpy.video.device import Device, VideoCapture
 DEVICE = ('/dev/v4l/by-id/'
           'usb-Anker_PowerConf_C200_Anker_PowerConf_C200_ACNV9P1F07509355-video-index0')
 SIZE = (1280, 720)
-FPS = 15
+FPS = 12        # recortado por software, ver _capture
 RETRY_S = 2.0
 
 # La C200 trae autofoco y auto-exposición: al panear se ponen a buscar y se ve
@@ -39,6 +40,7 @@ class Camera:
         self._cond = threading.Condition()
         self._stop = threading.Event()
         self._thread = None
+        self._subs = []
 
     def start(self):
         if self._thread is None:
@@ -82,9 +84,18 @@ class Camera:
             cap.set_fps(self.fps)
             with cap:
                 self.error = None
+                interval = 1.0 / self.fps if self.fps else 0.0
+                last = 0.0
                 for frame in cap:
                     if self._stop.is_set():
                         return
+                    # La C200 sólo entrega 30 fps: no hay otro intervalo que
+                    # negociar, así que recortamos acá. Cada frame son ~130 KB,
+                    # o sea ~31 Mbit/s sin recorte.
+                    now = time.monotonic()
+                    if now - last < interval:
+                        continue
+                    last = now
                     self._publish(bytes(frame))
         finally:
             dev.close()
@@ -94,6 +105,34 @@ class Camera:
             self._frame = jpeg
             self._seq += 1
             self._cond.notify_all()
+            subs = list(self._subs)
+        for loop, queue in subs:
+            loop.call_soon_threadsafe(self._offer, queue, jpeg)
+
+    # -- suscripción asyncio (para el endpoint de streaming) --------------
+
+    def subscribe(self):
+        """Cola con el último frame. Un cliente lento saltea, no acumula."""
+        entry = (asyncio.get_running_loop(), asyncio.Queue(maxsize=1))
+        with self._cond:
+            self._subs.append(entry)
+        return entry[1]
+
+    def unsubscribe(self, queue):
+        with self._cond:
+            self._subs = [s for s in self._subs if s[1] is not queue]
+
+    @staticmethod
+    def _offer(queue, jpeg):
+        if queue.full():
+            try:
+                queue.get_nowait()      # tiramos el viejo, mandamos el nuevo
+            except asyncio.QueueEmpty:
+                pass
+        try:
+            queue.put_nowait(jpeg)
+        except asyncio.QueueFull:
+            pass
 
     # -- consumo ---------------------------------------------------------
 

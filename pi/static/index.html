@@ -18,10 +18,15 @@
     display: flex; flex-direction: column; align-items: center; gap: 1.25rem;
   }
   #video {
-    width: 100%; max-width: 620px; aspect-ratio: 4/3;
+    width: 100%; max-width: 620px; aspect-ratio: 16/9;
     background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    overflow: hidden; cursor: pointer;
     display: grid; place-items: center; color: var(--dim); font-size: .9rem;
   }
+  #feed, #videoMsg { grid-area: 1 / 1; }
+  #feed { width: 100%; height: 100%; object-fit: cover; display: block; }
+  #video.live #videoMsg { display: none; }
+  #video:not(.live) #feed { visibility: hidden; }
   .console {
     width: 100%; max-width: 620px;
     background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
@@ -47,7 +52,10 @@
 </head>
 <body>
 
-<div id="video">el video va acá</div>
+<div id="video" title="Clic para reconectar">
+  <img id="feed" alt="Cámara">
+  <span id="videoMsg">conectando…</span>
+</div>
 
 <div class="console">
   <svg id="dial" viewBox="0 0 360 232"
@@ -195,6 +203,57 @@ dial.addEventListener('keydown', ev => {
   else return;
   ev.preventDefault();
 });
+
+// -- video ------------------------------------------------------------
+// El stream es multipart/x-mixed-replace: se muestra solo en un <img>, pero
+// cuando muere no siempre dispara 'error' — a veces la imagen queda congelada
+// y nada avisa. De ahí el watchdog.
+const video = document.getElementById('video');
+const feed = document.getElementById('feed');
+const videoMsg = document.getElementById('videoMsg');
+let backoff = 1000, retryAt = null, lastFrame = 0, loads = 0;
+
+function connect() {
+  clearTimeout(retryAt);
+  videoMsg.textContent = 'conectando…';
+  lastFrame = Date.now();
+  feed.src = '/api/stream?t=' + Date.now();   // sin query se sirve de caché
+}
+
+function dropFeed(msg) {
+  feed.removeAttribute('src');
+  video.classList.remove('live');
+  videoMsg.textContent = msg;
+}
+
+function reconnect() {
+  dropFeed('sin video, reintentando…');
+  retryAt = setTimeout(connect, backoff);
+  backoff = Math.min(backoff * 2, 15000);
+}
+
+feed.addEventListener('load', () => {
+  loads++;
+  lastFrame = Date.now();
+  backoff = 1000;
+  video.classList.add('live');
+});
+feed.addEventListener('error', () => { if (feed.src) reconnect(); });
+
+// Chrome y Firefox emiten 'load' por frame; si vemos más de uno sabemos que
+// podemos confiar en el timestamp para detectar un stream congelado.
+setInterval(() => {
+  if (loads > 1 && feed.src && Date.now() - lastFrame > 5000) reconnect();
+}, 2000);
+
+// Una pestaña de fondo sigue chupando ~12 Mbit/s del Pi si no la cortamos.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { clearTimeout(retryAt); dropFeed('en pausa'); }
+  else connect();
+});
+
+video.onclick = () => { backoff = 1000; connect(); };
+connect();
 
 document.getElementById('left').onclick = () => setAngle(angle - 10);
 document.getElementById('right').onclick = () => setAngle(angle + 10);

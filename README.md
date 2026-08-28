@@ -15,7 +15,8 @@ browser  ──HTTP──▶  Pi (FastAPI)  ──USB serial──▶  Pico (Mic
 | `pico/servo.py`       | Servo driver: angle → pulse width, plus detach so it stops buzzing |
 | `pico/main.py`        | Serial command loop on the Pico (`PAN <n>`, `HOME`)                |
 | `pi/server/pico_link.py` | Serial link to the Pico: port discovery, thread-safe send/reply |
-| `pi/server/app.py`    | FastAPI app exposing `/api/pan` and `/api/home`                    |
+| `pi/server/camera.py` | MJPEG capture from the USB webcam: one thread, many subscribers    |
+| `pi/server/app.py`    | FastAPI app exposing the pan, home, stream and snapshot endpoints  |
 | `pi/static/index.html`| Single-page UI: draggable SVG dial with FOV cone and keyboard support |
 
 ## Wiring
@@ -66,6 +67,8 @@ cuts PWM to the servo to stop the idle jitter.
 | ------------ | -------------------- | ----------------- |
 | `POST /api/pan` | `{"angle": 0-180}` | `{"angle": 120}`  |
 | `POST /api/home` | –                 | `{"angle": 90}`   |
+| `GET /api/stream` | –                | MJPEG (`multipart/x-mixed-replace`) |
+| `GET /api/snapshot` | –              | a single `image/jpeg` |
 
 A `502` means the Pico answered with something other than `OK`.
 
@@ -76,7 +79,26 @@ If your servo doesn't reach the full sweep, or strains at the ends, use
 `Servo.write_us()` from the Pico REPL to find the real limits and update those
 constants.
 
+## Camera
+
+An Anker PowerConf C200 on USB, at 1280x720. The camera encodes MJPEG onboard,
+so frames are passed through to the browser without ever being decoded — the Pi
+spends almost no CPU on video. It only offers 30 fps, so `camera.py` drops
+frames in software to reach `FPS`; at ~130 KB a frame, 12 fps is about
+12 Mbit/s.
+
+The device is opened once, by a single capture thread, because a V4L2 node
+can't be opened twice. Viewers subscribe to the latest frame and a slow one
+skips frames rather than accumulating a backlog.
+
+Your user must be in the `video` group (`sudo usermod -aG video $USER`, then log
+out and back in). Under systemd, also set `SupplementaryGroups=video` and
+`PrivateDevices=no` — the latter hides `/dev/video*` outright.
+
+Autofocus is pinned off in `CONTROLS`, since it hunts on every pan. Set
+`power_line_frequency` to `2` if you're on 60 Hz mains.
+
 ## Not done yet
 
-The video pane in the UI is a placeholder — no camera stream is wired up. Tilt
-is unimplemented; only pan exists.
+Tilt is unimplemented; only pan exists. The C200 does expose `tilt_absolute`
+over UVC (±10°, digital), which would give a limited tilt with no second servo.
