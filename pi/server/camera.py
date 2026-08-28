@@ -16,7 +16,11 @@ DEVICE = ('/dev/v4l/by-id/'
           'usb-Anker_PowerConf_C200_Anker_PowerConf_C200_ACNV9P1F07509355-video-index0')
 SIZE = (1280, 720)
 DEVICE_FPS = 30   # el único intervalo que ofrece la C200
-FPS = 30          # se redondea al divisor de DEVICE_FPS más cercano
+# 15 medido como el punto justo: ~22 Mbit/s llegan enteros por wifi. A 30 son
+# ~40 Mbit/s, más de lo que aguanta el enlace, y ahí se cae todo — el video a
+# 3 fps, los controles a 1.3 s y el link al Pico con timeout. Menos de 15
+# tampoco ayuda: el control tarda max(hueco entre frames, ~66 ms).
+FPS = 15          # se redondea al divisor de DEVICE_FPS más cercano
 RETRY_S = 2.0
 
 # La C200 trae autofoco y auto-exposición: al panear se ponen a buscar y se ve
@@ -114,8 +118,6 @@ class Camera:
                 # 10 sin avisar, de ahí que redondeemos y lo digamos.
                 every = max(1, round(DEVICE_FPS / self.fps)) if self.fps else 1
                 self.effective_fps = DEVICE_FPS / every
-                print('camera: {} fps efectivos (1 de cada {})'
-                      .format(self.effective_fps, every))
                 n = 0
                 for frame in cap:
                     if self._stop.is_set():
@@ -238,6 +240,7 @@ class Camera:
             subs = len(self._subs)
         now = time.monotonic()
         return {
+            'effective_fps': self.effective_fps,
             'captured': self.captured,
             'published': self.published,
             'dropped': self.captured - self.published,
