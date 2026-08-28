@@ -70,8 +70,11 @@ class Microphone:
     def _capture(self):
         cmd = ['arecord', '-D', self.device, '-f', 'S16_LE', '-r', str(self.rate),
                '-c', str(self.channels), '-t', 'raw', '-q']
+        # start_new_session lo saca del grupo de procesos de la terminal: si no,
+        # un Ctrl-C sobre uvicorn le pega a arecord y ensucia la salida.
         self._proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                                      stderr=subprocess.PIPE)
+                                      stderr=subprocess.PIPE,
+                                      start_new_session=True)
         self.error = None
         while not self._stop.is_set():
             pcm = self._proc.stdout.read(CHUNK)
