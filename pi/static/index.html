@@ -205,18 +205,17 @@ dial.addEventListener('keydown', ev => {
 });
 
 // -- video ------------------------------------------------------------
-// El stream es multipart/x-mixed-replace: se muestra solo en un <img>, pero
-// cuando muere no siempre dispara 'error' — a veces la imagen queda congelada
-// y nada avisa. De ahí el watchdog.
+// El stream es multipart/x-mixed-replace: se muestra solo en un <img>. El
+// evento 'load' no sirve para saber si sigue vivo — el browser lo dispara un
+// par de veces al abrir y después se calla, aunque sigan llegando frames.
 const video = document.getElementById('video');
 const feed = document.getElementById('feed');
 const videoMsg = document.getElementById('videoMsg');
-let backoff = 1000, retryAt = null, lastFrame = 0, loads = 0;
+let backoff = 1000, retryAt = null;
 
 function connect() {
   clearTimeout(retryAt);
   videoMsg.textContent = 'conectando…';
-  lastFrame = Date.now();
   feed.src = '/api/stream?t=' + Date.now();   // sin query se sirve de caché
 }
 
@@ -233,18 +232,10 @@ function reconnect() {
 }
 
 feed.addEventListener('load', () => {
-  loads++;
-  lastFrame = Date.now();
   backoff = 1000;
   video.classList.add('live');
 });
 feed.addEventListener('error', () => { if (feed.src) reconnect(); });
-
-// Chrome y Firefox emiten 'load' por frame; si vemos más de uno sabemos que
-// podemos confiar en el timestamp para detectar un stream congelado.
-setInterval(() => {
-  if (loads > 1 && feed.src && Date.now() - lastFrame > 5000) reconnect();
-}, 2000);
 
 // Una pestaña de fondo sigue chupando ~12 Mbit/s del Pi si no la cortamos.
 document.addEventListener('visibilitychange', () => {
